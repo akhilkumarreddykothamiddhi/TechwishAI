@@ -584,6 +584,34 @@ If no valid columns exist → return sql as empty string "".
 # ─────────────────────────────────────────────────────────────────
 #  CHART RENDERER
 # ─────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────
+#  COLUMN RESOLVER — fixes LLM alias/case mismatches on chart axes
+# ─────────────────────────────────────────────────────────────────
+def resolve_col(name: str, df_cols: list) -> str:
+    """Match `name` to the closest real DataFrame column name."""
+    if not name:
+        return name
+    # 1. Exact match
+    if name in df_cols:
+        return name
+    # 2. Case-insensitive
+    name_lower = name.lower()
+    for col in df_cols:
+        if col.lower() == name_lower:
+            return col
+    # 3. Normalised (remove spaces/underscores, lowercase)
+    def norm(s):
+        return _re.sub(r"[\s_]+", "", s.lower())
+    name_norm = norm(name)
+    for col in df_cols:
+        if norm(col) == name_norm:
+            return col
+    # 4. Substring match
+    for col in df_cols:
+        if name_norm in norm(col) or norm(col) in name_norm:
+            return col
+    return name  # unchanged if nothing matched
+
 def render_chart(
     df: pd.DataFrame,
     chart_type: str,
@@ -594,9 +622,19 @@ def render_chart(
 ):
     if chart_type == "none" or not x or not y:
         return
+
+    cols = list(df.columns)
+
+    # Resolve LLM-generated column names to actual DataFrame column names
+    x = resolve_col(x, cols)
+    y = resolve_col(y, cols)
+
+    # If still not found, auto-fallback to first two columns
     if x not in df.columns or (y not in df.columns and chart_type not in ["histogram", "pie"]):
-        st.warning(f"Chart columns '{x}' or '{y}' not found in results.")
-        return
+        if len(cols) >= 2:
+            x, y = cols[0], cols[1]
+        else:
+            return
 
     single_color = chart_color if chart_color else DEFAULT_CHART_COLOR
     seq_colors   = [chart_color] + DEFAULT_BLUE_SEQUENCE if chart_color else DEFAULT_BLUE_SEQUENCE
@@ -658,48 +696,43 @@ if "selected_db" not in st.session_state:
 #  SIDEBAR
 # ─────────────────────────────────────────────────────────────────
 with st.sidebar:
-    # ── Logo filenames in your Git repo (no extension needed — auto-detected) ──
-    # Light theme  → black/dark logo  (visible on white background)
-    # Dark theme   → white logo       (visible on dark background)
-    LOGO_LIGHT_FILE = "techwish_black_transparent"   # e.g. techwish_black_transparent.png
-    LOGO_DARK_FILE  = "Techwish-Logo-white (3)"      # e.g. Techwish-Logo-white (3).png
+    # ── Detect Streamlit's active theme server-side (reruns on theme change) ──
+    # st.context.theme is available in Streamlit >= 1.35
+    try:
+        _active_theme = st.context.theme.get("base", "light")
+    except Exception:
+        # Fallback: read from config.toml base setting
+        try:
+            import tomllib  # Python 3.11+
+        except ImportError:
+            import tomli as tomllib  # older Python
+        try:
+            _cfg_path = pathlib.Path(__file__).parent / ".streamlit" / "config.toml"
+            _active_theme = tomllib.loads(_cfg_path.read_text()).get("theme", {}).get("base", "light")
+        except Exception:
+            _active_theme = "light"
+
+    _is_dark = (_active_theme == "dark")
+
+    # Light mode → show black/dark logo (readable on white background)
+    # Dark mode  → show white logo     (readable on dark background)
+    LOGO_LIGHT_FILE = "techwish_black_transparent"
+    LOGO_DARK_FILE  = "Techwish-Logo-white (3)"
 
     light_src = img_to_b64(LOGO_LIGHT_FILE)
     dark_src  = img_to_b64(LOGO_DARK_FILE)
 
-    # Use whichever is available as the starting src; JS will swap on theme change
-    initial_src = light_src or dark_src
+    logo_src = (dark_src or light_src) if _is_dark else (light_src or dark_src)
 
-    if initial_src:
-        logo_js = f"""
-<div id="logo-wrap" class="logo-row">
-  <img id="tw-logo" src="{initial_src}"
-       style="max-width:150px; height:auto;" />
-  <span class="ai-badge">AI</span>
-</div>
-<script>
-(function() {{
-  var light = {json.dumps(light_src)};
-  var dark  = {json.dumps(dark_src)};
-  function applyLogo() {{
-    var el = document.getElementById("tw-logo");
-    if (!el) return;
-    var theme = document.documentElement.getAttribute("data-theme") || "";
-    var isDark = theme === "dark" ||
-                 (theme === "" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-    var src = isDark ? (dark || light) : (light || dark);
-    if (src) el.src = src;
-  }}
-  applyLogo();
-  var observer = new MutationObserver(applyLogo);
-  observer.observe(document.documentElement, {{ attributes: true, attributeFilter: ["data-theme"] }});
-  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyLogo);
-}})();
-</script>
-"""
-        st.markdown(logo_js, unsafe_allow_html=True)
+    if logo_src:
+        st.markdown(
+            f'<div class="logo-row">'
+            f'<img src="{logo_src}" style="max-width:150px; height:auto;" />'
+            f'<span class="ai-badge">AI</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
     else:
-        # Text fallback if neither logo file is found in the repo
         st.markdown(
             '<div class="logo-row">'
             '<span style="font-family:Poppins,sans-serif;font-weight:800;color:#1565C0;font-size:1.2rem;">Techwish</span>'
@@ -805,11 +838,13 @@ for msg in st.session_state.messages:
                     st.caption(f"{len(df)} row(s) returned")
             if msg.get("df") is not None and msg.get("chart", "none") != "none":
                 df = pd.DataFrame(msg["df"])
+                _cx = resolve_col(msg.get("chart_x", ""), list(df.columns))
+                _cy = resolve_col(msg.get("chart_y", ""), list(df.columns))
                 render_chart(
                     df,
                     msg["chart"],
-                    msg.get("chart_x", ""),
-                    msg.get("chart_y", ""),
+                    _cx,
+                    _cy,
                     chart_color=msg.get("chart_color"),
                     chart_title=msg.get("chart_title", ""),
                 )
@@ -860,6 +895,10 @@ def process_question(prompt: str):
                     st.dataframe(df, use_container_width=True)
                     st.caption(f"{len(df)} row(s) returned")
                     if chart != "none":
+                        # Resolve column names NOW against the real df columns
+                        # so history replay also uses the correct resolved names
+                        chart_x = resolve_col(chart_x, list(df.columns))
+                        chart_y = resolve_col(chart_y, list(df.columns))
                         render_chart(df, chart, chart_x, chart_y,
                                      chart_color=chart_color,
                                      chart_title=chart_title)
