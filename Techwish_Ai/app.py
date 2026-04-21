@@ -867,6 +867,17 @@ with st.sidebar:
             st.session_state.messages = []
             st.session_state.selected_db = selected_db
 
+        # # Green dot "Connected" indicator
+        # st.markdown(
+        #     f'<p style="margin-top:4px; font-size:0.75rem; font-family:Poppins,sans-serif; color:gray;">'
+        #     f'<span style="display:inline-block; width:8px; height:8px; border-radius:50%; '
+        #     f'background:#2E7D32; margin-right:5px; vertical-align:middle;"></span>'
+        #     f'<span style="vertical-align:middle; color:#2E7D32; font-weight:500;">Connected</span>'
+        #     f'&nbsp;·&nbsp;{selected_db}'
+        #     f'</p>',
+        #     unsafe_allow_html=True,
+        # )
+
     st.divider()
 
     if selected_db:
@@ -901,16 +912,19 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────────
 #  TOP BAR
 # ─────────────────────────────────────────────────────────────────
+connected_badge = (
+    f'<span style="display:inline-flex; align-items:center; gap:5px; '
+    f'font-size:0.75rem; font-family:Poppins,sans-serif; color:#2E7D32; font-weight:500;">'
+    f'<span style="display:inline-block; width:8px; height:8px; border-radius:50%; '
+    f'background:#2E7D32;"></span>Connected</span>'
+) if selected_db else ''
+
 st.markdown(f"""
 <div class="topbar">
     <div style="display:flex; align-items:center; gap:15px;">
         <h1>📊 {selected_db or "Analytics"}</h1>
+        {connected_badge}
         <span style="color:gray; font-size:0.9rem; font-family:Poppins,sans-serif;">| Powered by Techwish AI</span>
-    </div>
-    <div style="text-align:right;">
-        <span style="font-size:0.8rem; color:gray; font-family:Poppins,sans-serif;">
-            Database: {selected_db or "None selected"}
-        </span>
     </div>
 </div>
 """, unsafe_allow_html=True)
