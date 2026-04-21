@@ -4,7 +4,7 @@ import snowflake.connector
 import pandas as pd
 import plotly.express as px
 from groq import Groq
-import base64, pathlib
+import base64, pathlib, time
 
 # ─────────────────────────────────────────────────────────────────
 #  CONFIGURATION
@@ -16,10 +16,6 @@ def cfg(key: str, default: str = "") -> str:
         return os.environ.get(key, default)
 
 def _clean_account(raw: str) -> str:
-    """
-    Snowflake connector needs just the account identifier, e.g. 'TCFIWLF-SJ78956'.
-    Strip any accidental '.snowflakecomputing.com' suffix the user might paste.
-    """
     raw = raw.strip()
     raw = _re.sub(r'\.snowflakecomputing\.com.*$', '', raw, flags=_re.IGNORECASE)
     return raw
@@ -148,7 +144,6 @@ def list_databases() -> list[str]:
         cur = conn.cursor()
         cur.execute("SHOW DATABASES")
         rows = cur.fetchall()
-        # Column index 1 = name, skip Snowflake system DBs
         system_dbs = {"SNOWFLAKE", "SNOWFLAKE_SAMPLE_DATA"}
         dbs = [row[1] for row in rows if row[1] not in system_dbs]
         return sorted(dbs)
@@ -412,9 +407,8 @@ def get_sample_questions(database: str) -> list[str]:
         ]
 
 # ─────────────────────────────────────────────────────────────────
-#  LOGO HELPER
-#  Looks for the file by EXACT name first (with extension),
-#  then tries appending common image extensions.
+#  LOGO HELPER — server-side theme detection (from first code)
+#  Looks for file by EXACT name first, then tries common extensions.
 #  Searches: script directory, then cwd.
 # ─────────────────────────────────────────────────────────────────
 def img_to_b64(filename: str) -> str:
@@ -431,7 +425,7 @@ def img_to_b64(filename: str) -> str:
     return ""
 
 # ─────────────────────────────────────────────────────────────────
-#  NL → SQL  (Snowflake SQL dialect)
+#  NL → SQL  (Snowflake SQL dialect) — IMPROVED from second code
 # ─────────────────────────────────────────────────────────────────
 def nl_to_sql(question: str, history: list, database: str) -> dict:
     wl = build_whitelist(database)
@@ -440,11 +434,80 @@ def nl_to_sql(question: str, history: list, database: str) -> dict:
         f"  {tbl}: {', '.join(cols)}"
         for tbl, cols in wl.items()
     )
-    last_sql = ""
+    # Capture last assistant response for follow-up context
+    last_sql         = ""
+    last_chart       = "none"
+    last_chart_x     = ""
+    last_chart_y     = ""
+    last_chart_title = ""
+    last_chart_color = None
+    last_summary     = ""
+    last_df          = None
     for m in reversed(history):
         if m.get("role") == "assistant" and m.get("sql"):
-            last_sql = m["sql"]
+            last_sql         = m["sql"]
+            last_chart       = m.get("chart", "none")
+            last_chart_x     = m.get("chart_x", "")
+            last_chart_y     = m.get("chart_y", "")
+            last_chart_title = m.get("chart_title", "")
+            last_chart_color = m.get("chart_color")
+            last_summary     = m.get("summary", "")
+            last_df          = m.get("df")
             break
+
+    # ── APPEARANCE-ONLY SHORT-CIRCUIT ──────────────────────────────
+    # Detect requests that ONLY change color / chart-type / title.
+    # These must NOT trigger a new SQL query — just patch chart fields.
+    # ───────────────────────────────────────────────────────────────
+    _q = question.strip().lower()
+
+    _COLOR_ONLY = bool(_re.search(
+        r'\b(make|change|set|use|turn|switch|update)\b.{0,40}\b(color|colour)\b'
+        r'|\bcolor\b.{0,20}\b(to|as|into)\b'
+        r'|\b(red|green|blue|yellow|orange|purple|pink|teal|cyan|indigo|lime|amber|'
+        r'brown|grey|gray|black|navy|maroon|violet|gold|silver|coral|magenta|'
+        r'turquoise|lavender|rose|crimson|salmon|khaki)\b',
+        _q
+    ))
+    _CHART_TYPE = bool(_re.search(
+        r'\b(make|change|convert|switch|turn)\b.{0,30}'
+        r'\b(bar|line|pie|area|scatter|donut|histogram|funnel|treemap|sunburst)\b'
+        r'|\b(bar|line|pie|area|scatter|donut|histogram|funnel|treemap|sunburst)\s+chart\b',
+        _q
+    ))
+    _TITLE_ONLY = bool(_re.search(
+        r'\b(change|set|update|rename)\b.{0,20}\btitle\b',
+        _q
+    ))
+
+    _is_appearance_only = last_sql and (_COLOR_ONLY or _CHART_TYPE or _TITLE_ONLY)
+
+    if _is_appearance_only:
+        new_color = extract_color_from_question(question) or last_chart_color
+
+        new_chart = last_chart
+        _ct_match = _re.search(
+            r'\b(bar|line|pie|area|scatter|donut|histogram|funnel|treemap|sunburst)\b', _q
+        )
+        if _ct_match:
+            new_chart = _ct_match.group(1)
+
+        new_title = last_chart_title
+        _title_match = _re.search(r'title\s+to\s+["\']?(.+?)["\']?\s*$', _q)
+        if _title_match:
+            new_title = _title_match.group(1).strip().strip("\"'")
+
+        return {
+            "sql":        last_sql,
+            "summary":    last_summary,
+            "chart":      new_chart,
+            "chart_x":    last_chart_x,
+            "chart_y":    last_chart_y,
+            "chart_title": new_title,
+            "chart_color": new_color,
+            "_reuse_df":  last_df,
+        }
+    # ── END APPEARANCE-ONLY SHORT-CIRCUIT ──────────────────────────
 
     system_prompt = f"""You are an expert business intelligence assistant and strict Snowflake SQL query generator
 for Snowflake database: "{database}".
@@ -534,20 +597,74 @@ Instructions:
             })
         messages.append({"role": "user", "content": user_message})
         client = Groq(api_key=GROQ_API_KEY)
-        resp = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[{"role": "system", "content": sys_content}] + messages,
-            temperature=0.0,
-            max_tokens=1024,
-        )
-        raw = resp.choices[0].message.content.strip()
-        raw = _re.sub(r"^```[a-z]*\n?", "", raw).strip("`").strip()
-        return json.loads(raw)
 
-    result = call_groq()
-    sql    = result.get("sql", "").strip()
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                resp = client.chat.completions.create(
+                    model=GROQ_MODEL,
+                    messages=[{"role": "system", "content": sys_content}] + messages,
+                    temperature=0.0,
+                    max_tokens=1024,
+                )
+                raw = resp.choices[0].message.content.strip()
+                raw = _re.sub(r"^```[a-z]*\n?", "", raw).strip("`").strip()
+                json_match = _re.search(r'\{.*\}', raw, _re.DOTALL)
+                if json_match:
+                    raw = json_match.group(0)
+                if not raw:
+                    raise ValueError("Empty response from model")
+                return json.loads(raw)
+            except Exception as e:
+                err_str = str(e).lower()
+                is_rate_limit = (
+                    "ratelimit" in err_str or
+                    "rate_limit" in err_str or
+                    "rate limit" in err_str or
+                    "429" in err_str or
+                    "too many" in err_str or
+                    "tokens per minute" in err_str or
+                    "requests per minute" in err_str
+                )
+                if is_rate_limit and attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 20
+                    st.toast(f"⏳ Rate limit reached — retrying in {wait_time}s… (attempt {attempt + 1}/{max_retries})", icon="⏳")
+                    time.sleep(wait_time)
+                    continue
+                elif is_rate_limit:
+                    raise RuntimeError(
+                        "⚠️ The AI service is currently rate-limited (too many requests). "
+                        "Please wait 30–60 seconds and try again."
+                    )
+                else:
+                    raise
+
+    try:
+        result = call_groq()
+    except RuntimeError as rate_err:
+        return {
+            "sql": "",
+            "summary": str(rate_err),
+            "chart": "none",
+            "chart_x": "",
+            "chart_y": "",
+            "chart_title": "",
+            "chart_color": None,
+        }
+    except Exception as e:
+        return {
+            "sql": "",
+            "summary": f"⚠️ Unexpected error while generating query: {e}",
+            "chart": "none",
+            "chart_x": "",
+            "chart_y": "",
+            "chart_title": "",
+            "chart_color": None,
+        }
+
+    sql        = result.get("sql", "").strip()
     user_color = extract_color_from_question(question)
-    result["chart_color"] = user_color
+    result["chart_color"] = user_color or result.get("chart_color") or None
 
     is_valid, bad_cols = validate_sql_against_whitelist(sql, wl)
     if not is_valid and sql:
@@ -574,6 +691,10 @@ If no valid columns exist → return sql as empty string "".
                     "Please rephrase your question or check the schema in the sidebar."
                 )
                 result["chart"] = "none"
+        except RuntimeError as rate_err:
+            result["sql"]     = ""
+            result["summary"] = str(rate_err)
+            result["chart"]   = "none"
         except Exception:
             result["sql"]     = ""
             result["summary"] = "Query generation failed after validation. Please try rephrasing."
@@ -582,36 +703,31 @@ If no valid columns exist → return sql as empty string "".
     return result
 
 # ─────────────────────────────────────────────────────────────────
-#  CHART RENDERER
-# ─────────────────────────────────────────────────────────────────
-# ─────────────────────────────────────────────────────────────────
 #  COLUMN RESOLVER — fixes LLM alias/case mismatches on chart axes
 # ─────────────────────────────────────────────────────────────────
-def resolve_col(name: str, df_cols: list) -> str:
-    """Match `name` to the closest real DataFrame column name."""
-    if not name:
-        return name
-    # 1. Exact match
-    if name in df_cols:
-        return name
-    # 2. Case-insensitive
-    name_lower = name.lower()
-    for col in df_cols:
-        if col.lower() == name_lower:
-            return col
-    # 3. Normalised (remove spaces/underscores, lowercase)
+def resolve_chart_col(col: str, df_columns: list) -> str:
+    if not col:
+        return col
+    if col in df_columns:
+        return col
+    col_lower = col.lower()
+    for c in df_columns:
+        if c.lower() == col_lower:
+            return c
     def norm(s):
         return _re.sub(r"[\s_]+", "", s.lower())
-    name_norm = norm(name)
-    for col in df_cols:
-        if norm(col) == name_norm:
-            return col
-    # 4. Substring match
-    for col in df_cols:
-        if name_norm in norm(col) or norm(col) in name_norm:
-            return col
-    return name  # unchanged if nothing matched
+    col_norm = norm(col)
+    for c in df_columns:
+        if norm(c) == col_norm:
+            return c
+    for c in df_columns:
+        if col_lower in c.lower() or c.lower() in col_lower:
+            return c
+    return col
 
+# ─────────────────────────────────────────────────────────────────
+#  CHART RENDERER
+# ─────────────────────────────────────────────────────────────────
 def render_chart(
     df: pd.DataFrame,
     chart_type: str,
@@ -622,22 +738,13 @@ def render_chart(
 ):
     if chart_type == "none" or not x or not y:
         return
-
-    cols = list(df.columns)
-
-    # Resolve LLM-generated column names to actual DataFrame column names
-    x = resolve_col(x, cols)
-    y = resolve_col(y, cols)
-
-    # If still not found, auto-fallback to first two columns
     if x not in df.columns or (y not in df.columns and chart_type not in ["histogram", "pie"]):
-        if len(cols) >= 2:
-            x, y = cols[0], cols[1]
-        else:
-            return
+        st.warning(f"Chart columns '{x}' or '{y}' not found in results.")
+        return
 
     single_color = chart_color if chart_color else DEFAULT_CHART_COLOR
     seq_colors   = [chart_color] + DEFAULT_BLUE_SEQUENCE if chart_color else DEFAULT_BLUE_SEQUENCE
+    title_color  = chart_color if chart_color else "#1565C0"
 
     try:
         common_kwargs = dict(title=chart_title) if chart_title else {}
@@ -676,7 +783,7 @@ def render_chart(
             yaxis=dict(showgrid=True, gridcolor="rgba(200,200,200,0.2)"),
             title=dict(
                 text=chart_title,
-                font=dict(family="Poppins", size=15, color="#1565C0"),
+                font=dict(family="Poppins", size=15, color=title_color),
                 x=0.02,
             ) if chart_title else {},
         )
@@ -693,19 +800,17 @@ if "selected_db" not in st.session_state:
     st.session_state.selected_db = None
 
 # ─────────────────────────────────────────────────────────────────
-#  SIDEBAR
+#  SIDEBAR — dynamic logo via server-side theme detection (first code)
 # ─────────────────────────────────────────────────────────────────
 with st.sidebar:
-    # ── Detect Streamlit's active theme server-side (reruns on theme change) ──
-    # st.context.theme is available in Streamlit >= 1.35
+    # Detect Streamlit's active theme server-side (reruns on theme change)
     try:
         _active_theme = st.context.theme.get("base", "light")
     except Exception:
-        # Fallback: read from config.toml base setting
         try:
             import tomllib  # Python 3.11+
         except ImportError:
-            import tomli as tomllib  # older Python
+            import tomli as tomllib
         try:
             _cfg_path = pathlib.Path(__file__).parent / ".streamlit" / "config.toml"
             _active_theme = tomllib.loads(_cfg_path.read_text()).get("theme", {}).get("base", "light")
@@ -714,8 +819,6 @@ with st.sidebar:
 
     _is_dark = (_active_theme == "dark")
 
-    # Light mode → show black/dark logo (readable on white background)
-    # Dark mode  → show white logo     (readable on dark background)
     LOGO_LIGHT_FILE = "techwish_black_transparent"
     LOGO_DARK_FILE  = "Techwish-Logo-white (3)"
 
@@ -838,28 +941,30 @@ for msg in st.session_state.messages:
                     st.caption(f"{len(df)} row(s) returned")
             if msg.get("df") is not None and msg.get("chart", "none") != "none":
                 df = pd.DataFrame(msg["df"])
-                _cx = resolve_col(msg.get("chart_x", ""), list(df.columns))
-                _cy = resolve_col(msg.get("chart_y", ""), list(df.columns))
                 render_chart(
                     df,
                     msg["chart"],
-                    _cx,
-                    _cy,
+                    msg.get("chart_x", ""),
+                    msg.get("chart_y", ""),
                     chart_color=msg.get("chart_color"),
                     chart_title=msg.get("chart_title", ""),
                 )
 
 # ─────────────────────────────────────────────────────────────────
-#  CHAT PROCESSING
+#  CHAT PROCESSING — two-phase pattern from second code
+#  Phase A: append user msg + set _pending_prompt → rerun
+#            (history loop above renders the user bubble)
+#  Phase B: on next run, _pending_prompt exists → run AI +
+#            append assistant msg → rerun so history loop renders it
 # ─────────────────────────────────────────────────────────────────
-def process_question(prompt: str):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+
+# ── Phase B: pending prompt is ready, run AI now ──
+if "_pending_prompt" in st.session_state:
+    pending = st.session_state.pop("_pending_prompt")
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
-            result = nl_to_sql(prompt, st.session_state.messages, selected_db)
+            result = nl_to_sql(pending, st.session_state.messages, selected_db)
 
         sql         = result.get("sql", "").strip()
         summary     = result.get("summary", "")
@@ -868,6 +973,7 @@ def process_question(prompt: str):
         chart_y     = result.get("chart_y", "")
         chart_color = result.get("chart_color")
         chart_title = result.get("chart_title", "")
+        reuse_df    = result.get("_reuse_df")   # set by appearance-only short-circuit
 
         st.markdown(summary)
 
@@ -880,11 +986,16 @@ def process_question(prompt: str):
                     f'<div class="sql-block">{sql}</div>',
                     unsafe_allow_html=True,
                 )
-            with st.spinner("Running query..."):
-                try:
-                    df = run_query(sql, selected_db)
-                except Exception as e:
-                    error = str(e)
+
+            # ── If appearance-only, reuse last df without re-running SQL ──
+            if reuse_df is not None:
+                df = pd.DataFrame(reuse_df)
+            else:
+                with st.spinner("Running query..."):
+                    try:
+                        df = run_query(sql, selected_db)
+                    except Exception as e:
+                        error = str(e)
 
             if error:
                 st.error(f"Query failed: {error}")
@@ -895,13 +1006,15 @@ def process_question(prompt: str):
                     st.dataframe(df, use_container_width=True)
                     st.caption(f"{len(df)} row(s) returned")
                     if chart != "none":
-                        # Resolve column names NOW against the real df columns
-                        # so history replay also uses the correct resolved names
-                        chart_x = resolve_col(chart_x, list(df.columns))
-                        chart_y = resolve_col(chart_y, list(df.columns))
-                        render_chart(df, chart, chart_x, chart_y,
+                        resolved_x = resolve_chart_col(chart_x, list(df.columns))
+                        resolved_y = resolve_chart_col(chart_y, list(df.columns))
+                        render_chart(df, chart, resolved_x, resolved_y,
                                      chart_color=chart_color,
                                      chart_title=chart_title)
+
+        # Store resolved column names so history replay also works
+        resolved_x_store = resolve_chart_col(chart_x, list(df.columns)) if df is not None and not df.empty else chart_x
+        resolved_y_store = resolve_chart_col(chart_y, list(df.columns)) if df is not None and not df.empty else chart_y
 
         st.session_state.messages.append({
             "role":        "assistant",
@@ -910,17 +1023,24 @@ def process_question(prompt: str):
             "sql":         sql,
             "df":          df.to_dict("records") if df is not None and not df.empty else None,
             "chart":       chart,
-            "chart_x":     chart_x,
-            "chart_y":     chart_y,
+            "chart_x":     resolved_x_store,
+            "chart_y":     resolved_y_store,
             "chart_color": chart_color,
             "chart_title": chart_title,
         })
 
 # ─────────────────────────────────────────────────────────────────
 #  CHAT INPUT
+#  Phase A: capture prompt → append user msg → store pending → rerun
 # ─────────────────────────────────────────────────────────────────
+_new_prompt = None
+
 if "_inject_question" in st.session_state:
-    injected = st.session_state.pop("_inject_question")
-    process_question(injected)
+    _new_prompt = st.session_state.pop("_inject_question")
 elif prompt := st.chat_input("Ask anything about your data..."):
-    process_question(prompt)
+    _new_prompt = prompt
+
+if _new_prompt:
+    st.session_state.messages.append({"role": "user", "content": _new_prompt})
+    st.session_state["_pending_prompt"] = _new_prompt
+    st.rerun()
