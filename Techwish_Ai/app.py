@@ -489,14 +489,25 @@ STEP 4 — FOLLOW-UP QUERY HANDLING
 Last SQL in this conversation:
 {last_sql if last_sql else "(none — this is the first query)"}
 
-If the new question is a modification → edit ONLY the last SQL.
+If the new question is a modification (add filter, change sort, adjust limit,
+change chart type) → edit ONLY the last SQL. Preserve all JOINs and aliases.
 If it's a new topic → write a fresh query.
 
+CHART-ONLY FOLLOW-UPS (no SQL change needed):
+If the user ONLY wants to change the chart title, color, or chart type
+(e.g. "change the title to X", "make it red", "show as pie chart") →
+  - Return the SAME sql as last time (copy it exactly)
+  - Update only the relevant chart fields in the JSON
+  - Do NOT regenerate the SQL
+
 ════════════════════════════════════════════════════════
-STEP 5 — CHART TITLE
+STEP 5 — CHART TITLE & COLOR
 ════════════════════════════════════════════════════════
-- If the user explicitly mentions a chart title, extract that exact title.
-- Otherwise, generate a short descriptive chart title.
+- If the user explicitly sets a chart title (e.g. "title it Revenue by Branch",
+  "change title to Monthly Sales") → use that exact string as chart_title.
+- If the user asks to change the color → the color is extracted client-side,
+  but still set chart_title from context.
+- If no title is mentioned → generate a short descriptive chart title.
 - Always populate "chart_title" in the output JSON.
 
 ════════════════════════════════════════════════════════
@@ -696,42 +707,43 @@ if "selected_db" not in st.session_state:
 #  SIDEBAR
 # ─────────────────────────────────────────────────────────────────
 with st.sidebar:
-    # ── Detect Streamlit's active theme server-side (reruns on theme change) ──
-    # st.context.theme is available in Streamlit >= 1.35
-    try:
-        _active_theme = st.context.theme.get("base", "light")
-    except Exception:
-        # Fallback: read from config.toml base setting
-        try:
-            import tomllib  # Python 3.11+
-        except ImportError:
-            import tomli as tomllib  # older Python
-        try:
-            _cfg_path = pathlib.Path(__file__).parent / ".streamlit" / "config.toml"
-            _active_theme = tomllib.loads(_cfg_path.read_text()).get("theme", {}).get("base", "light")
-        except Exception:
-            _active_theme = "light"
-
-    _is_dark = (_active_theme == "dark")
-
-    # Light mode → show black/dark logo (readable on white background)
-    # Dark mode  → show white logo     (readable on dark background)
-    LOGO_LIGHT_FILE = "techwish_black_transparent"
-    LOGO_DARK_FILE  = "Techwish-Logo-white (3)"
+    # ── Logo: embed BOTH images, CSS media query swaps them ──────────
+    # This is the most reliable approach in Streamlit — no JS needed,
+    # works instantly when the user toggles light/dark theme.
+    LOGO_LIGHT_FILE = "techwish_black_transparent"   # dark logo for light bg
+    LOGO_DARK_FILE  = "Techwish-Logo-white (3)"      # white logo for dark bg
 
     light_src = img_to_b64(LOGO_LIGHT_FILE)
     dark_src  = img_to_b64(LOGO_DARK_FILE)
 
-    logo_src = (dark_src or light_src) if _is_dark else (light_src or dark_src)
-
-    if logo_src:
-        st.markdown(
-            f'<div class="logo-row">'
-            f'<img src="{logo_src}" style="max-width:150px; height:auto;" />'
-            f'<span class="ai-badge">AI</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+    if light_src or dark_src:
+        # Use CSS prefers-color-scheme to swap — works without JS
+        # Also watch Streamlit's data-theme attribute via CSS attribute selector
+        _logo_css = f"""
+<style>
+  .tw-logo-light {{ display: block; }}
+  .tw-logo-dark  {{ display: none;  }}
+  @media (prefers-color-scheme: dark) {{
+    .tw-logo-light {{ display: none;  }}
+    .tw-logo-dark  {{ display: block; }}
+  }}
+  /* Streamlit sets data-theme on <html> when user toggles */
+  :root[data-theme="dark"]  .tw-logo-light {{ display: none;  }}
+  :root[data-theme="dark"]  .tw-logo-dark  {{ display: block; }}
+  :root[data-theme="light"] .tw-logo-light {{ display: block; }}
+  :root[data-theme="light"] .tw-logo-dark  {{ display: none;  }}
+</style>
+<div class="logo-row">
+  <div style="position:relative;">
+    <img class="tw-logo-light" src="{light_src or dark_src}"
+         style="max-width:150px; height:auto;" />
+    <img class="tw-logo-dark"  src="{dark_src or light_src}"
+         style="max-width:150px; height:auto; position:absolute; top:0; left:0;" />
+  </div>
+  <span class="ai-badge">AI</span>
+</div>
+"""
+        st.markdown(_logo_css, unsafe_allow_html=True)
     else:
         st.markdown(
             '<div class="logo-row">'
@@ -836,6 +848,30 @@ for msg in st.session_state.messages:
                 if not df.empty:
                     st.dataframe(df, use_container_width=True)
                     st.caption(f"{len(df)} row(s) returned")
+                    _msg_idx = st.session_state.messages.index(msg)
+                    _hcol1, _hcol2, _hspacer = st.columns([1, 1, 6])
+                    with _hcol1:
+                        st.download_button(
+                            label="⬇️ CSV",
+                            data=df.to_csv(index=False).encode("utf-8"),
+                            file_name="query_results.csv",
+                            mime="text/csv",
+                            use_container_width=True,
+                            key=f"h_csv_{_msg_idx}",
+                        )
+                    with _hcol2:
+                        import io as _io
+                        _ebuf = _io.BytesIO()
+                        with pd.ExcelWriter(_ebuf, engine="openpyxl") as _w:
+                            df.to_excel(_w, index=False, sheet_name="Results")
+                        st.download_button(
+                            label="⬇️ Excel",
+                            data=_ebuf.getvalue(),
+                            file_name="query_results.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                            key=f"h_xlsx_{_msg_idx}",
+                        )
             if msg.get("df") is not None and msg.get("chart", "none") != "none":
                 df = pd.DataFrame(msg["df"])
                 _cx = resolve_col(msg.get("chart_x", ""), list(df.columns))
@@ -853,13 +889,22 @@ for msg in st.session_state.messages:
 #  CHAT PROCESSING
 # ─────────────────────────────────────────────────────────────────
 def process_question(prompt: str):
+    # Append user message to state first, then rerun so history loop
+    # renders it properly in order (fixes suggestion-click hidden message)
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    st.session_state["_processing"] = prompt
+    st.rerun()
+
+# ─────────────────────────────────────────────────────────────────
+#  CHAT INPUT
+# ─────────────────────────────────────────────────────────────────
+# ── Handle assistant response for pending question ──────────────
+if "_processing" in st.session_state:
+    prompt_to_process = st.session_state.pop("_processing")
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
-            result = nl_to_sql(prompt, st.session_state.messages, selected_db)
+            result = nl_to_sql(prompt_to_process, st.session_state.messages, selected_db)
 
         sql         = result.get("sql", "").strip()
         summary     = result.get("summary", "")
@@ -894,9 +939,34 @@ def process_question(prompt: str):
                 else:
                     st.dataframe(df, use_container_width=True)
                     st.caption(f"{len(df)} row(s) returned")
+
+                    # Export buttons row
+                    col_exp1, col_exp2, col_spacer = st.columns([1, 1, 6])
+                    with col_exp1:
+                        csv_data = df.to_csv(index=False).encode("utf-8")
+                        st.download_button(
+                            label="⬇️ CSV",
+                            data=csv_data,
+                            file_name="query_results.csv",
+                            mime="text/csv",
+                            use_container_width=True,
+                            key=f"csv_{len(st.session_state.messages)}",
+                        )
+                    with col_exp2:
+                        import io
+                        excel_buf = io.BytesIO()
+                        with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
+                            df.to_excel(writer, index=False, sheet_name="Results")
+                        st.download_button(
+                            label="⬇️ Excel",
+                            data=excel_buf.getvalue(),
+                            file_name="query_results.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                            key=f"xlsx_{len(st.session_state.messages)}",
+                        )
+
                     if chart != "none":
-                        # Resolve column names NOW against the real df columns
-                        # so history replay also uses the correct resolved names
                         chart_x = resolve_col(chart_x, list(df.columns))
                         chart_y = resolve_col(chart_y, list(df.columns))
                         render_chart(df, chart, chart_x, chart_y,
@@ -916,11 +986,12 @@ def process_question(prompt: str):
             "chart_title": chart_title,
         })
 
-# ─────────────────────────────────────────────────────────────────
-#  CHAT INPUT
-# ─────────────────────────────────────────────────────────────────
+# ── Suggestion button inject ─────────────────────────────────────
 if "_inject_question" in st.session_state:
     injected = st.session_state.pop("_inject_question")
     process_question(injected)
-elif prompt := st.chat_input("Ask anything about your data..."):
+
+# ── Chat input ───────────────────────────────────────────────────
+prompt = st.chat_input("Ask anything about your data...")
+if prompt:
     process_question(prompt)
