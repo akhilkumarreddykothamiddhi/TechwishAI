@@ -1,10 +1,11 @@
 import streamlit as st
+import streamlit.components.v1 as st_components
 import os, uuid, json, re as _re
 import snowflake.connector
 import pandas as pd
 import plotly.express as px
 from groq import Groq
-import base64, pathlib
+import base64, pathlib, time
 
 # ─────────────────────────────────────────────────────────────────
 #  CONFIGURATION
@@ -16,10 +17,6 @@ def cfg(key: str, default: str = "") -> str:
         return os.environ.get(key, default)
 
 def _clean_account(raw: str) -> str:
-    """
-    Snowflake connector needs just the account identifier, e.g. 'TCFIWLF-SJ78956'.
-    Strip any accidental '.snowflakecomputing.com' suffix the user might paste.
-    """
     raw = raw.strip()
     raw = _re.sub(r'\.snowflakecomputing\.com.*$', '', raw, flags=_re.IGNORECASE)
     return raw
@@ -54,7 +51,7 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────
-#  CSS — Poppins font
+#  CSS — Poppins font  (UNCHANGED)
 # ─────────────────────────────────────────────────────────────────
 st.markdown("""
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -148,7 +145,6 @@ def list_databases() -> list[str]:
         cur = conn.cursor()
         cur.execute("SHOW DATABASES")
         rows = cur.fetchall()
-        # Column index 1 = name, skip Snowflake system DBs
         system_dbs = {"SNOWFLAKE", "SNOWFLAKE_SAMPLE_DATA"}
         dbs = [row[1] for row in rows if row[1] not in system_dbs]
         return sorted(dbs)
@@ -413,9 +409,6 @@ def get_sample_questions(database: str) -> list[str]:
 
 # ─────────────────────────────────────────────────────────────────
 #  LOGO HELPER
-#  Looks for the file by EXACT name first (with extension),
-#  then tries appending common image extensions.
-#  Searches: script directory, then cwd.
 # ─────────────────────────────────────────────────────────────────
 def img_to_b64(filename: str) -> str:
     search_bases = [pathlib.Path(__file__).parent, pathlib.Path(".")]
@@ -440,23 +433,44 @@ def nl_to_sql(question: str, history: list, database: str) -> dict:
         f"  {tbl}: {', '.join(cols)}"
         for tbl, cols in wl.items()
     )
-    last_sql = ""
+    # Capture last assistant response for follow-up context
+    last_sql        = ""
+    last_chart      = "none"
+    last_chart_x    = ""
+    last_chart_y    = ""
+    last_chart_title= ""
+    last_chart_color= None
     for m in reversed(history):
         if m.get("role") == "assistant" and m.get("sql"):
-            last_sql = m["sql"]
+            last_sql         = m["sql"]
+            last_chart       = m.get("chart", "none")
+            last_chart_x     = m.get("chart_x", "")
+            last_chart_y     = m.get("chart_y", "")
+            last_chart_title = m.get("chart_title", "")
+            last_chart_color = m.get("chart_color")
             break
 
     system_prompt = f"""You are an expert business intelligence assistant and strict Snowflake SQL query generator
 for Snowflake database: "{database}".
 
 ════════════════════════════════════════════════════════
+CRITICAL RULE — READ THIS FIRST, EVERY TIME
+════════════════════════════════════════════════════════
+You MUST use ONLY the exact table names and column names listed in STEP 2.
+NEVER invent, guess, abbreviate, or assume any identifier.
+Before writing SQL, do a mental PRE-FLIGHT CHECK:
+  For every table name → confirm it exists EXACTLY in STEP 2.
+  For every column name → confirm it exists EXACTLY in STEP 2.
+  If even ONE identifier is not in the list → rewrite using only listed names.
+  If no valid mapping exists → return sql="" and explain why clearly.
+
+════════════════════════════════════════════════════════
 STEP 1 — UNDERSTAND THE USER'S BUSINESS INTENT
 ════════════════════════════════════════════════════════
-The user asks questions in plain English without knowing table or column names.
-YOUR JOB is to:
-  1. Read the user's question and understand what business concept they care about.
-  2. Scan the schema below to find the BEST matching table(s) and column(s).
-  3. Write Snowflake SQL using ONLY the exact names found in the schema.
+The user asks in plain English. Your job:
+  1. Understand what business concept they care about.
+  2. Find the BEST matching table(s) and column(s) from STEP 2.
+  3. Write Snowflake SQL using ONLY exact names from STEP 2.
 
 ════════════════════════════════════════════════════════
 STEP 2 — THE COMPLETE SCHEMA (EXACT NAMES, LIVE FROM DB)
@@ -464,40 +478,60 @@ STEP 2 — THE COMPLETE SCHEMA (EXACT NAMES, LIVE FROM DB)
 {strict_block}
 
 ABSOLUTE IDENTIFIER RULES — NO EXCEPTIONS:
-✗ Do NOT use any table or column name not listed above.
-✗ Do NOT guess, abbreviate, pluralize, or invent names.
-✓ Copy column names character-for-character from the numbered list.
-✓ If no relevant table/column exists → set sql to "" and explain.
+✗ NEVER use any table or column name not in the numbered list above.
+✗ NEVER guess, abbreviate, pluralize, shorten, or invent names.
+✗ NEVER use names like DOCTOR_KEY, STUDENT_ID, BRANCH_CODE, SCHOOL_KEY
+  unless they appear EXACTLY in the numbered list above.
+✓ Copy every identifier character-for-character from the numbered list.
+✓ If no relevant table/column exists → sql="" with a clear explanation.
 
 ════════════════════════════════════════════════════════
 STEP 3 — SNOWFLAKE SQL RULES
 ════════════════════════════════════════════════════════
-- Snowflake SQL syntax only. Use LIMIT N, NOT TOP N.
-- Column and table names are case-insensitive in Snowflake — use them as-is.
-- Always alias tables (e.g. FROM CUSTOMERS c).
-- Prefix all column references with alias when joins are present.
-- Always GROUP BY non-aggregated columns when using COUNT/SUM/AVG/MIN/MAX.
+- Snowflake SQL syntax only. Use LIMIT N (never TOP N).
+- ⚠️ LIMIT RULE: Only add LIMIT if the user explicitly says "top N", "first N",
+  "bottom N", or states a specific number like "show me 5". If the user asks a
+  general question like "how many", "which branch", "show all", "per school" →
+  do NOT add any LIMIT. Return all rows.
+- Always alias tables (e.g. FROM STUDENTS s).
+- Prefix all columns with table alias when joins exist.
+- Always GROUP BY non-aggregated columns with COUNT/SUM/AVG/MIN/MAX.
 - Use explicit column names. Never SELECT *.
-- For "top N" → use ORDER BY col DESC LIMIT N.
-- For date functions: use DATETRUNC, DATE_TRUNC, DATEDIFF (Snowflake style).
-- For string functions: use IFF, COALESCE, ZEROIFNULL, NVL as needed.
-- Use double quotes around identifiers ONLY if they contain special characters.
+- For date functions: DATETRUNC, DATE_TRUNC, DATEDIFF (Snowflake style).
+- For JOINs: only join on columns that ACTUALLY EXIST in both tables per STEP 2.
+- When user asks to use a NAME column instead of a KEY column → use the name
+  column from the correct table, joining if necessary.
 
 ════════════════════════════════════════════════════════
-STEP 4 — FOLLOW-UP QUERY HANDLING
+STEP 4 — FOLLOW-UP HANDLING (VERY IMPORTANT)
 ════════════════════════════════════════════════════════
 Last SQL in this conversation:
 {last_sql if last_sql else "(none — this is the first query)"}
 
-If the new question is a modification → edit ONLY the last SQL.
-If it's a new topic → write a fresh query.
+Last chart state: type={last_chart}, x={last_chart_x}, y={last_chart_y},
+  title="{last_chart_title}", color={last_chart_color}
+
+RULES for follow-up questions:
+A) If user asks to change ONLY chart appearance (color, title, chart type) and
+   the data does not need to change → keep the EXACT same SQL as last time,
+   update only chart/chart_title fields in the JSON output.
+B) If user asks to change the data (different column, filter, grouping) →
+   write a new or modified SQL.
+C) If user asks to change chart title color → that is a chart_color change.
+   Return the same SQL, same chart type, same chart_x/y, update chart_color only.
+D) If user says "change to line chart", "make it a bar chart" → same SQL,
+   just update "chart" field.
+E) If user says "change title to X" → same SQL, update chart_title only.
+F) If user says "use school name instead of key" → modify SQL to select the
+   name column (joining if needed), update chart_x to the name column.
 
 ════════════════════════════════════════════════════════
-STEP 5 — CHART TITLE
+STEP 5 — CHART COLUMN NAMES
 ════════════════════════════════════════════════════════
-- If the user explicitly mentions a chart title, extract that exact title.
-- Otherwise, generate a short descriptive chart title.
-- Always populate "chart_title" in the output JSON.
+- chart_x and chart_y MUST match the exact column alias used in your SELECT.
+  Example: if SQL says "COUNT(*) AS STUDENT_COUNT", chart_y = "STUDENT_COUNT"
+  Example: if SQL says "s.SCHOOL_NAME", chart_x = "SCHOOL_NAME"
+- Never put a column in chart_x/y that is not in the SELECT output.
 
 ════════════════════════════════════════════════════════
 OUTPUT — RAW JSON ONLY. NO MARKDOWN. NO CODE FENCES.
@@ -506,24 +540,48 @@ OUTPUT — RAW JSON ONLY. NO MARKDOWN. NO CODE FENCES.
   "sql": "SELECT ...",
   "summary": "One sentence business insight in plain English",
   "chart": "bar|line|pie|scatter|area|histogram|none",
-  "chart_x": "exact_column_name",
-  "chart_y": "exact_column_name",
-  "chart_title": "Short descriptive title for the chart"
+  "chart_x": "exact_output_column_name",
+  "chart_y": "exact_output_column_name",
+  "chart_title": "Short descriptive title for the chart",
+  "chart_color": null
 }}
+
+Note: chart_color should be null unless user explicitly requests a color.
 """
 
-    user_message = f"""AVAILABLE TABLES AND COLUMNS (copy names exactly):
+    user_message = f"""════ VALID TABLES AND COLUMNS — USE ONLY THESE, COPY EXACTLY ════
 {compact_block}
+════════════════════════════════════════════════════════════════════
 
 USER QUESTION: {question}
 
-Instructions:
-- Infer which table(s) best match the question's topic.
-- Use ONLY the column names listed above.
+PRE-FLIGHT CHECK (mandatory before writing SQL):
+1. Identify which table(s) from the list above best answer this question.
+2. Identify which column(s) from those tables you need.
+3. Verify EVERY identifier appears EXACTLY in the list above.
+4. Only then write the SQL.
+
+FOLLOW-UP DETECTION:
+- Is this asking to change chart color/title/type only (no data change)?
+  → Reuse last SQL exactly. Update only chart/chart_title/chart_color in JSON.
+- Is this asking to change the data (columns, grouping, filters)?
+  → Write new/modified SQL.
+- Does the question mention a color (red, green, yellow, blue, etc.)?
+  → Set chart_color to that color's hex value. Do NOT set it to null.
+
+LIMIT RULE — CRITICAL:
+- ONLY add LIMIT if user explicitly says "top N", "first N", "bottom N",
+  or mentions a specific number like "show 5", "give me 10".
+- Questions like "how many", "per school", "by branch", "show all", "which"
+  → NO LIMIT. Return all rows.
+
+Additional rules:
+- chart_x and chart_y must match the EXACT alias/column name in your SELECT.
 - Do not mention table names in the summary.
-- If user mentions a chart title, extract it. Otherwise write a short descriptive title.
+- If you cannot find matching columns → return sql="" with a clear explanation.
 """
 
+    # ── FIX 4: Groq call with retry + rate-limit error handling ──
     def call_groq(extra_instruction: str = "") -> dict:
         sys_content = system_prompt + ("\n\n" + extra_instruction if extra_instruction else "")
         messages = []
@@ -534,20 +592,77 @@ Instructions:
             })
         messages.append({"role": "user", "content": user_message})
         client = Groq(api_key=GROQ_API_KEY)
-        resp = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[{"role": "system", "content": sys_content}] + messages,
-            temperature=0.0,
-            max_tokens=1024,
-        )
-        raw = resp.choices[0].message.content.strip()
-        raw = _re.sub(r"^```[a-z]*\n?", "", raw).strip("`").strip()
-        return json.loads(raw)
 
-    result = call_groq()
-    sql    = result.get("sql", "").strip()
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                resp = client.chat.completions.create(
+                    model=GROQ_MODEL,
+                    messages=[{"role": "system", "content": sys_content}] + messages,
+                    temperature=0.0,
+                    max_tokens=1024,
+                )
+                raw = resp.choices[0].message.content.strip()
+                # Strip markdown code fences
+                raw = _re.sub(r"^```[a-z]*\n?", "", raw).strip("`").strip()
+                # If model wrapped JSON in extra text, extract just the JSON object
+                json_match = _re.search(r'\{.*\}', raw, _re.DOTALL)
+                if json_match:
+                    raw = json_match.group(0)
+                if not raw:
+                    raise ValueError("Empty response from model")
+                return json.loads(raw)
+            except Exception as e:
+                err_str = str(e).lower()
+                is_rate_limit = (
+                    "ratelimit" in err_str or
+                    "rate_limit" in err_str or
+                    "rate limit" in err_str or
+                    "429" in err_str or
+                    "too many" in err_str or
+                    "tokens per minute" in err_str or
+                    "requests per minute" in err_str
+                )
+                if is_rate_limit and attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 20  # 20s, 40s
+                    st.toast(f"⏳ Rate limit reached — retrying in {wait_time}s… (attempt {attempt + 1}/{max_retries})", icon="⏳")
+                    time.sleep(wait_time)
+                    continue
+                elif is_rate_limit:
+                    raise RuntimeError(
+                        "⚠️ The AI service is currently rate-limited (too many requests). "
+                        "Please wait 30–60 seconds and try again."
+                    )
+                else:
+                    raise
+
+    try:
+        result = call_groq()
+    except RuntimeError as rate_err:
+        return {
+            "sql": "",
+            "summary": str(rate_err),
+            "chart": "none",
+            "chart_x": "",
+            "chart_y": "",
+            "chart_title": "",
+            "chart_color": None,
+        }
+    except Exception as e:
+        return {
+            "sql": "",
+            "summary": f"⚠️ Unexpected error while generating query: {e}",
+            "chart": "none",
+            "chart_x": "",
+            "chart_y": "",
+            "chart_title": "",
+            "chart_color": None,
+        }
+
+    sql        = result.get("sql", "").strip()
     user_color = extract_color_from_question(question)
-    result["chart_color"] = user_color
+    # Priority: explicit color extracted from question > AI-returned color > None
+    result["chart_color"] = user_color or result.get("chart_color") or None
 
     is_valid, bad_cols = validate_sql_against_whitelist(sql, wl)
     if not is_valid and sql:
@@ -574,6 +689,10 @@ If no valid columns exist → return sql as empty string "".
                     "Please rephrase your question or check the schema in the sidebar."
                 )
                 result["chart"] = "none"
+        except RuntimeError as rate_err:
+            result["sql"]     = ""
+            result["summary"] = str(rate_err)
+            result["chart"]   = "none"
         except Exception:
             result["sql"]     = ""
             result["summary"] = "Query generation failed after validation. Please try rephrasing."
@@ -583,34 +702,30 @@ If no valid columns exist → return sql as empty string "".
 
 # ─────────────────────────────────────────────────────────────────
 #  CHART RENDERER
+#  FIX 2: chart title color now follows chart_color when provided
 # ─────────────────────────────────────────────────────────────────
-# ─────────────────────────────────────────────────────────────────
-#  COLUMN RESOLVER — fixes LLM alias/case mismatches on chart axes
-# ─────────────────────────────────────────────────────────────────
-def resolve_col(name: str, df_cols: list) -> str:
-    """Match `name` to the closest real DataFrame column name."""
-    if not name:
-        return name
-    # 1. Exact match
-    if name in df_cols:
-        return name
-    # 2. Case-insensitive
-    name_lower = name.lower()
-    for col in df_cols:
-        if col.lower() == name_lower:
-            return col
-    # 3. Normalised (remove spaces/underscores, lowercase)
-    def norm(s):
-        return _re.sub(r"[\s_]+", "", s.lower())
-    name_norm = norm(name)
-    for col in df_cols:
-        if norm(col) == name_norm:
-            return col
-    # 4. Substring match
-    for col in df_cols:
-        if name_norm in norm(col) or norm(col) in name_norm:
-            return col
-    return name  # unchanged if nothing matched
+def resolve_chart_col(col: str, df_columns: list) -> str:
+    """
+    Resolve a chart column name against actual DataFrame columns.
+    Tries exact match first, then case-insensitive, then partial match.
+    Returns the matched column name or the original if no match found.
+    """
+    if not col:
+        return col
+    # Exact match
+    if col in df_columns:
+        return col
+    # Case-insensitive match
+    col_lower = col.lower()
+    for c in df_columns:
+        if c.lower() == col_lower:
+            return c
+    # Partial match — column contains the hint or vice versa
+    for c in df_columns:
+        if col_lower in c.lower() or c.lower() in col_lower:
+            return c
+    return col  # fallback — render_chart will show a clean warning
+
 
 def render_chart(
     df: pd.DataFrame,
@@ -622,22 +737,14 @@ def render_chart(
 ):
     if chart_type == "none" or not x or not y:
         return
-
-    cols = list(df.columns)
-
-    # Resolve LLM-generated column names to actual DataFrame column names
-    x = resolve_col(x, cols)
-    y = resolve_col(y, cols)
-
-    # If still not found, auto-fallback to first two columns
     if x not in df.columns or (y not in df.columns and chart_type not in ["histogram", "pie"]):
-        if len(cols) >= 2:
-            x, y = cols[0], cols[1]
-        else:
-            return
+        st.warning(f"Chart columns '{x}' or '{y}' not found in results.")
+        return
 
     single_color = chart_color if chart_color else DEFAULT_CHART_COLOR
     seq_colors   = [chart_color] + DEFAULT_BLUE_SEQUENCE if chart_color else DEFAULT_BLUE_SEQUENCE
+    # FIX 2: title color = user-requested color, fallback to default blue
+    title_color  = chart_color if chart_color else "#1565C0"
 
     try:
         common_kwargs = dict(title=chart_title) if chart_title else {}
@@ -676,7 +783,7 @@ def render_chart(
             yaxis=dict(showgrid=True, gridcolor="rgba(200,200,200,0.2)"),
             title=dict(
                 text=chart_title,
-                font=dict(family="Poppins", size=15, color="#1565C0"),
+                font=dict(family="Poppins", size=15, color=title_color),  # FIX 2 applied here
                 x=0.02,
             ) if chart_title else {},
         )
@@ -696,42 +803,81 @@ if "selected_db" not in st.session_state:
 #  SIDEBAR
 # ─────────────────────────────────────────────────────────────────
 with st.sidebar:
-    # ── Detect Streamlit's active theme server-side (reruns on theme change) ──
-    # st.context.theme is available in Streamlit >= 1.35
-    try:
-        _active_theme = st.context.theme.get("base", "light")
-    except Exception:
-        # Fallback: read from config.toml base setting
-        try:
-            import tomllib  # Python 3.11+
-        except ImportError:
-            import tomli as tomllib  # older Python
-        try:
-            _cfg_path = pathlib.Path(__file__).parent / ".streamlit" / "config.toml"
-            _active_theme = tomllib.loads(_cfg_path.read_text()).get("theme", {}).get("base", "light")
-        except Exception:
-            _active_theme = "light"
-
-    _is_dark = (_active_theme == "dark")
-
-    # Light mode → show black/dark logo (readable on white background)
-    # Dark mode  → show white logo     (readable on dark background)
     LOGO_LIGHT_FILE = "techwish_black_transparent"
     LOGO_DARK_FILE  = "Techwish-Logo-white (3)"
 
     light_src = img_to_b64(LOGO_LIGHT_FILE)
     dark_src  = img_to_b64(LOGO_DARK_FILE)
 
-    logo_src = (dark_src or light_src) if _is_dark else (light_src or dark_src)
+    initial_src = light_src or dark_src
 
-    if logo_src:
-        st.markdown(
-            f'<div class="logo-row">'
-            f'<img src="{logo_src}" style="max-width:150px; height:auto;" />'
-            f'<span class="ai-badge">AI</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+    if initial_src:
+        # ── FIX 3: Robust Streamlit theme detection ──
+        # Streamlit sets data-theme="dark"/"light" on <html> but may be slow.
+        # We also check the computed background color of the sidebar as a reliable fallback.
+        logo_js = f"""
+<div id="logo-wrap" style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+  <img id="tw-logo" src="{initial_src}"
+       style="max-width:150px; height:auto;" />
+  <span style="background:#1565C0; color:white; font-family:'Poppins',sans-serif;
+               font-weight:700; font-size:0.65rem; padding:2px 7px; border-radius:20px;
+               letter-spacing:0.05em; line-height:1.4; vertical-align:middle;">AI</span>
+</div>
+<script>
+(function() {{
+  var light = {json.dumps(light_src)};
+  var dark  = {json.dumps(dark_src)};
+
+  function isDarkTheme() {{
+    // Method 1: Streamlit's data-theme attribute on <html>
+    var htmlTheme = document.documentElement.getAttribute("data-theme");
+    if (htmlTheme === "dark") return true;
+    if (htmlTheme === "light") return false;
+
+    // Method 2: Check Streamlit's sidebar background color
+    var sidebar = document.querySelector('[data-testid="stSidebar"]');
+    if (sidebar) {{
+      var bg = window.getComputedStyle(sidebar).backgroundColor;
+      // Parse rgb values — dark background = low brightness
+      var m = bg.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+      if (m) {{
+        var brightness = (parseInt(m[1]) * 299 + parseInt(m[2]) * 587 + parseInt(m[3]) * 114) / 1000;
+        return brightness < 128;
+      }}
+    }}
+
+    // Method 3: OS preference as last resort
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  }}
+
+  function applyLogo() {{
+    var el = document.getElementById("tw-logo");
+    if (!el) return;
+    var src = isDarkTheme() ? (dark || light) : (light || dark);
+    if (src && el.src !== src) el.src = src;
+  }}
+
+  // Run immediately and on a short poll until Streamlit finishes rendering
+  applyLogo();
+  var attempts = 0;
+  var interval = setInterval(function() {{
+    applyLogo();
+    attempts++;
+    if (attempts > 30) clearInterval(interval);  // stop after ~15s
+  }}, 500);
+
+  // Also react to Streamlit theme toggle (attribute change on <html>)
+  var observer = new MutationObserver(applyLogo);
+  observer.observe(document.documentElement, {{ attributes: true, attributeFilter: ["data-theme", "class"] }});
+
+  // Also react to OS theme change
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyLogo);
+}})();
+</script>
+"""
+        # Use st_components.html so the <script> actually executes
+        # instead of being rendered as visible text by st.markdown
+        st_components.html(logo_js, height=50, scrolling=False)
     else:
         st.markdown(
             '<div class="logo-row">'
@@ -796,28 +942,70 @@ with st.sidebar:
         )
 
 # ─────────────────────────────────────────────────────────────────
-#  TOP BAR
+#  TOP BAR — title left, theme toggle right
 # ─────────────────────────────────────────────────────────────────
-st.markdown(f"""
-<div class="topbar">
-    <div style="display:flex; align-items:center; gap:15px;">
-        <h1>📊 {selected_db or "Analytics"}</h1>
-        <span style="color:gray; font-size:0.9rem; font-family:Poppins,sans-serif;">| Powered by Techwish AI</span>
-    </div>
-    <div style="text-align:right;">
-        <span style="font-size:0.8rem; color:gray; font-family:Poppins,sans-serif;">
-            Database: {selected_db or "None selected"}
-        </span>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+if "dark_mode" not in st.session_state:
+    st.session_state.dark_mode = True
+
+_col_title, _col_spacer, _col_theme = st.columns([6, 2, 2])
+with _col_title:
+    st.markdown(f"""
+<div style="display:flex; align-items:center; gap:15px; padding: 0.6rem 0 0.4rem 0;
+            border-bottom: 1px solid rgba(128,128,128,0.2); margin-bottom: 0.5rem;">
+    <span style="font-family:'Poppins',sans-serif; font-weight:800; font-size:1.5rem;
+                 color:#1565C0;">📊 {selected_db or "Analytics"}</span>
+    <span style="color:gray; font-size:0.9rem; font-family:'Poppins',sans-serif;">
+        | Powered by Techwish AI</span>
+</div>""", unsafe_allow_html=True)
+
+with _col_theme:
+    _theme_label = "☀️ Light" if st.session_state.dark_mode else "🌙 Dark"
+    if st.button(_theme_label, key="topbar_theme_btn", use_container_width=True):
+        st.session_state.dark_mode = not st.session_state.dark_mode
+        _new_base = "light" if not st.session_state.dark_mode else "dark"
+        _bg       = "#FFFFFF" if _new_base == "light" else "#0E1117"
+        _sbg      = "#F0F2F6" if _new_base == "light" else "#1A1D23"
+        _txt      = "#31333F" if _new_base == "light" else "#FAFAFA"
+        st_components.html(f"""
+<script>
+(function(){{
+  var theme = {{
+    "base": "{_new_base}",
+    "primaryColor": "#1565C0",
+    "backgroundColor": "{_bg}",
+    "secondaryBackgroundColor": "{_sbg}",
+    "textColor": "{_txt}",
+    "font": "sans serif",
+    "widgetBackgroundColor": "",
+    "widgetBorderColor": "",
+    "skeletonBackgroundColor": ""
+  }};
+  // Streamlit reads from this localStorage key to set the active theme
+  var keys = Object.keys(localStorage).filter(function(k){{
+    return k.startsWith('stActiveTheme');
+  }});
+  var key = keys.length > 0 ? keys[0] : 'stActiveTheme-/';
+  localStorage.setItem(key, JSON.stringify(theme));
+  // Fire storage event so Streamlit's theme listener picks it up
+  window.dispatchEvent(new StorageEvent('storage', {{
+    key: key,
+    newValue: JSON.stringify(theme),
+    storageArea: localStorage
+  }}));
+}})();
+</script>
+""", height=0, scrolling=False)
+        st.rerun()
+
+st.markdown("<div style='border-bottom:1px solid rgba(128,128,128,0.2); margin-bottom:1rem;'></div>",
+            unsafe_allow_html=True)
 
 if not selected_db:
     st.info("Please select a database from the sidebar to get started.")
     st.stop()
 
 # ─────────────────────────────────────────────────────────────────
-#  CHAT HISTORY
+#  CHAT HISTORY  (UNCHANGED)
 # ─────────────────────────────────────────────────────────────────
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -838,28 +1026,32 @@ for msg in st.session_state.messages:
                     st.caption(f"{len(df)} row(s) returned")
             if msg.get("df") is not None and msg.get("chart", "none") != "none":
                 df = pd.DataFrame(msg["df"])
-                _cx = resolve_col(msg.get("chart_x", ""), list(df.columns))
-                _cy = resolve_col(msg.get("chart_y", ""), list(df.columns))
                 render_chart(
                     df,
                     msg["chart"],
-                    _cx,
-                    _cy,
+                    msg.get("chart_x", ""),
+                    msg.get("chart_y", ""),
                     chart_color=msg.get("chart_color"),
                     chart_title=msg.get("chart_title", ""),
                 )
 
 # ─────────────────────────────────────────────────────────────────
 #  CHAT PROCESSING
+#  USER BUBBLE FIX:
+#  We use a two-phase pattern so the bubble always shows:
+#    Phase A — append user msg + set _pending_prompt, then rerun.
+#              The history loop above will render the user bubble.
+#    Phase B — on next run, _pending_prompt exists → run AI + append
+#              assistant msg + rerun so history loop renders it too.
 # ─────────────────────────────────────────────────────────────────
-def process_question(prompt: str):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+
+# ── Phase B: pending prompt is ready, run AI now ──
+if "_pending_prompt" in st.session_state:
+    pending = st.session_state.pop("_pending_prompt")
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
-            result = nl_to_sql(prompt, st.session_state.messages, selected_db)
+            result = nl_to_sql(pending, st.session_state.messages, selected_db)
 
         sql         = result.get("sql", "").strip()
         summary     = result.get("summary", "")
@@ -895,14 +1087,15 @@ def process_question(prompt: str):
                     st.dataframe(df, use_container_width=True)
                     st.caption(f"{len(df)} row(s) returned")
                     if chart != "none":
-                        # Resolve column names NOW against the real df columns
-                        # so history replay also uses the correct resolved names
-                        chart_x = resolve_col(chart_x, list(df.columns))
-                        chart_y = resolve_col(chart_y, list(df.columns))
-                        render_chart(df, chart, chart_x, chart_y,
+                        resolved_x = resolve_chart_col(chart_x, list(df.columns))
+                        resolved_y = resolve_chart_col(chart_y, list(df.columns))
+                        render_chart(df, chart, resolved_x, resolved_y,
                                      chart_color=chart_color,
                                      chart_title=chart_title)
 
+        # Store resolved column names so history replay also works
+        resolved_x_store = resolve_chart_col(chart_x, list(df.columns)) if df is not None and not df.empty else chart_x
+        resolved_y_store = resolve_chart_col(chart_y, list(df.columns)) if df is not None and not df.empty else chart_y
         st.session_state.messages.append({
             "role":        "assistant",
             "content":     summary,
@@ -910,17 +1103,28 @@ def process_question(prompt: str):
             "sql":         sql,
             "df":          df.to_dict("records") if df is not None and not df.empty else None,
             "chart":       chart,
-            "chart_x":     chart_x,
-            "chart_y":     chart_y,
+            "chart_x":     resolved_x_store,
+            "chart_y":     resolved_y_store,
             "chart_color": chart_color,
             "chart_title": chart_title,
         })
 
 # ─────────────────────────────────────────────────────────────────
 #  CHAT INPUT
+#  Phase A: capture prompt → append user msg → store pending → rerun
+#  This guarantees the history loop renders the user bubble first.
 # ─────────────────────────────────────────────────────────────────
+
+# Collect input from either the sidebar button or the chat box
+_new_prompt = None
+
 if "_inject_question" in st.session_state:
-    injected = st.session_state.pop("_inject_question")
-    process_question(injected)
+    _new_prompt = st.session_state.pop("_inject_question")
 elif prompt := st.chat_input("Ask anything about your data..."):
-    process_question(prompt)
+    _new_prompt = prompt
+
+if _new_prompt:
+    # Phase A: save user message and set pending, then rerun
+    st.session_state.messages.append({"role": "user", "content": _new_prompt})
+    st.session_state["_pending_prompt"] = _new_prompt
+    st.rerun()
