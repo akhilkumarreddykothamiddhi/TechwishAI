@@ -71,7 +71,7 @@ html, body, [class*="css"], .stApp, .stMarkdown, .stTextInput,
     font-family: 'Poppins', sans-serif !important;
 }
 
-/* ── Strip Streamlit's default main-content padding so we control it ── */
+/* ── Strip default padding so header sits flush ── */
 [data-testid="stAppViewBlockContainer"],
 [data-testid="stMainBlockContainer"] {
     padding-left: 0 !important;
@@ -102,9 +102,16 @@ html, body, [class*="css"], .stApp, .stMarkdown, .stTextInput,
     color: #1565C0;
 }
 
-/* Re-add padding for content below the topbar */
+/* ── CHANGE 1: Chat-aligned content wrapper ──
+   Matches Streamlit's chat message left padding so the header
+   visually lines up with the dialogue bubbles.               */
 .main-content {
-    padding: 0 2rem;
+    padding: 0 1rem 0 1rem;
+}
+
+/* ── Header row that aligns with chat messages ── */
+.header-aligned {
+    padding: 1rem 1rem 0 1rem;
 }
 
 .result-card {
@@ -144,36 +151,103 @@ html, body, [class*="css"], .stApp, .stMarkdown, .stTextInput,
     vertical-align: middle;
 }
 
-/* Restore padding for all streamlit elements after topbar */
-section[data-testid="stMain"] > div:first-child > div > div > div > div:not(:first-child) {
-    padding-left: 2rem !important;
-    padding-right: 2rem !important;
+/* ── Empty-state AI image — centred, no-scroll, auto-scale ──
+   position:fixed keeps the element OUT of the document flow so it
+   can never cause a scrollbar regardless of screen resolution.
+   The image itself is sized with clamp() + max() so it always fits
+   inside the available rectangle and never overflows.            */
+.ai-welcome-img {
+    position: fixed;           /* out of flow → zero scrollbar impact  */
+    top: 80px;                 /* clear header + divider               */
+    bottom: 72px;              /* clear chat-input bar                 */
+    left: max(300px, 21rem);   /* clear sidebar                        */
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;      /* don't block clicks on anything below */
+    z-index: 0;
+    overflow: hidden;          /* belt-and-braces: never cause scroll   */
+}
+.ai-welcome-img img {
+    /*
+      Two clamp axes guarantee the image always fits the zone:
+        width  → min 120px, prefer 28vw, max 320px
+        height → min 120px, prefer 38vh, max 320px
+      object-fit:contain keeps aspect ratio intact with no cropping.
+      No fixed px, no border-radius, no overflow.
+    */
+    width:     clamp(120px, 28vw, 320px);
+    height:    clamp(120px, 38vh, 320px);
+    max-width:  calc(100% - 2rem);   /* safety margin on narrow windows */
+    max-height: calc(100% - 4rem);   /* safety margin if zone is short  */
+    object-fit: contain;
+    display: block;
+    flex-shrink: 0;
+}
+.ai-welcome-caption {
+    margin-top: 0.6rem;
+    font-family: 'Poppins', sans-serif;
+    font-size: clamp(0.7rem, 1.1vw, 0.9rem);
+    color: gray;
+    text-align: center;
+    pointer-events: auto;
+    flex-shrink: 0;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────
-#  DATABASE CONNECTION — no caching to avoid token expiry
+#  DATABASE CONNECTION  — persistent, non-expiring
+#  One connection is stored in st.session_state["_sf_conn"].
+#  Before every use we ping it with "SELECT 1"; if the ping fails
+#  we reconnect once — this prevents token-expiry lag without ever
+#  creating a new connection on a healthy session.
 # ─────────────────────────────────────────────────────────────────
-def _create_snowflake_conn(database: str = None):
-    connect_kwargs = dict(
+def _build_conn_kwargs(database: str = None) -> dict:
+    kw = dict(
         account=SNOWFLAKE_ACCOUNT,
         user=SNOWFLAKE_USER,
         password=SNOWFLAKE_PASSWORD,
         warehouse=SNOWFLAKE_WAREHOUSE,
+        # Keep the session alive server-side (heartbeat every 3 600 s)
+        session_parameters={"CLIENT_SESSION_KEEP_ALIVE": "TRUE"},
+        # Network-level timeout — long enough for slow queries
+        network_timeout=300,
+        login_timeout=60,
     )
     if database:
-        connect_kwargs["database"] = database
+        kw["database"] = database
     if SNOWFLAKE_ROLE:
-        connect_kwargs["role"] = SNOWFLAKE_ROLE
-    return snowflake.connector.connect(**connect_kwargs)
+        kw["role"] = SNOWFLAKE_ROLE
+    return kw
 
-# Alias so nothing else breaks
+def _new_conn(database: str = None):
+    return snowflake.connector.connect(**_build_conn_kwargs(database))
+
+def _get_conn() -> "snowflake.connector.connection.SnowflakeConnection":
+    """Return the live session-state connection, reconnecting only if dead."""
+    conn = st.session_state.get("_sf_conn")
+    if conn is not None:
+        try:
+            conn.cursor().execute("SELECT 1")   # cheap ping
+            return conn
+        except Exception:
+            pass  # connection is dead — fall through and reconnect
+    conn = _new_conn()
+    st.session_state["_sf_conn"] = conn
+    return conn
+
+# Keep legacy alias so nothing else in the file breaks
+def _create_snowflake_conn(database: str = None):
+    return _get_conn()
+
 def get_snowflake_conn(database: str = None):
-    return _create_snowflake_conn(database)
+    return _get_conn()
 
 def run_query(sql: str, database: str) -> pd.DataFrame:
-    """Run query with automatic reconnect on token expiry (08001 / 390114)."""
+    """Run SQL using the persistent connection; reconnect once on failure."""
     def _execute(conn):
         cur = conn.cursor()
         cur.execute(f'USE DATABASE "{database}"')
@@ -182,19 +256,22 @@ def run_query(sql: str, database: str) -> pd.DataFrame:
         rows = cur.fetchall()
         return pd.DataFrame(rows, columns=cols)
 
+    conn = _get_conn()
     try:
-        conn = _create_snowflake_conn(database)
         return _execute(conn)
     except Exception as e:
         err = str(e)
-        if "08001" in err or "390114" in err or "Authentication token" in err:
-            conn = _create_snowflake_conn(database)
+        # Any connectivity / auth error → reconnect once
+        if any(x in err for x in ("08001", "390114", "Authentication token",
+                                   "Connection", "connection", "session")):
+            conn = _new_conn()
+            st.session_state["_sf_conn"] = conn
             return _execute(conn)
         raise
 
 def list_databases() -> list[str]:
     try:
-        conn = _create_snowflake_conn()
+        conn = _get_conn()
         cur = conn.cursor()
         cur.execute("SHOW DATABASES")
         rows = cur.fetchall()
@@ -1198,21 +1275,39 @@ with st.sidebar:
         )
 
 # ─────────────────────────────────────────────────────────────────
-#  TOP BAR — uses a JS snippet to measure sidebar width and
-#  stretch the divider line flush to the sidebar border
+#  GUARD — no database selected
 # ─────────────────────────────────────────────────────────────────
 if not selected_db:
     st.info("Please select a database from the sidebar to get started.")
     st.stop()
 
+# ─────────────────────────────────────────────────────────────────
+#  CHANGE 1 — Load ai_icon.png once as base64 for reuse
+# ─────────────────────────────────────────────────────────────────
+_ai_icon_src = img_to_b64("ai_icon")   # looks for ai_icon.png / .jpg / etc.
+
+# ─────────────────────────────────────────────────────────────────
+#  CHANGE 2 — HEADER  (aligned with chat message dialogue box)
+#  • Replaces the 📊 emoji with ai_icon.png
+#  • Uses padding that matches Streamlit's chat container left edge
+# ─────────────────────────────────────────────────────────────────
 connected_badge = (
-    f'<span style="display:inline-flex; align-items:center; gap:5px; '
-    f'font-size:0.75rem; font-family:Poppins,sans-serif; color:#2E7D32; font-weight:500;">'
-    f'<span style="display:inline-block; width:8px; height:8px; border-radius:50%; '
-    f'background:#2E7D32;"></span>Connected</span>'
+    '<span style="display:inline-flex; align-items:center; gap:5px; '
+    'font-size:0.75rem; font-family:Poppins,sans-serif; color:#2E7D32; font-weight:500;">'
+    '<span style="display:inline-block; width:8px; height:8px; border-radius:50%; '
+    'background:#2E7D32;"></span>Connected</span>'
 ) if selected_db else ''
 
-# Inject JS that reads the actual main-block left offset and applies it
+# Icon HTML — uses ai_icon.png if available, falls back to the chart emoji
+if _ai_icon_src:
+    _db_icon_html = (
+        f'<img src="{_ai_icon_src}" '
+        f'style="width:36px; height:36px; object-fit:contain; border-radius:6px; flex-shrink:0;" />'
+    )
+else:
+    _db_icon_html = '<span style="font-size:1.6rem; line-height:1;">📊</span>'
+
+# The voice-input JS component still needs its 56 px iframe slot
 components.html("""
 <script>
 (function() {
@@ -1220,23 +1315,26 @@ components.html("""
     const mainBlock = window.parent.document.querySelector('[data-testid="stAppViewBlockContainer"]');
     const divider   = window.parent.document.getElementById('tw-top-divider');
     if (!mainBlock || !divider) return;
-    const rect      = mainBlock.getBoundingClientRect();
-    const leftPx    = rect.left;
-    divider.style.marginLeft  = `-${leftPx}px`;
-    divider.style.width       = `calc(100% + ${leftPx}px)`;
+    const rect  = mainBlock.getBoundingClientRect();
+    const leftPx = rect.left;
+    divider.style.marginLeft = `-${leftPx}px`;
+    divider.style.width      = `calc(100% + ${leftPx}px)`;
   }
-  // Run once after paint, then on resize
   setTimeout(alignDivider, 200);
   window.addEventListener('resize', alignDivider);
 })();
 </script>
-""", height=56, scrolling=False)
+""", height=65, scrolling=False)
 
+# Header block — padding-left matches Streamlit's default main-block indent
+# (Streamlit uses ~4rem / 64px left padding in wide-layout; we mirror that
+#  so the icon+title visually lines up with the chat message bubbles below.)
 st.markdown(f"""
-<div style="padding: 1rem 0 0 0;">
-    <div style="display:flex; align-items:center; gap:15px; margin-bottom:0.6rem;">
+<div style="padding: 0.5rem 2rem 0 4rem;">
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:0.5rem;">
+        {_db_icon_html}
         <h1 style="font-family:Poppins,sans-serif; font-weight:800; font-size:1.6rem;
-                   margin:0; color:#1565C0;">📊 {selected_db or "Analytics"}</h1>
+                   margin:0; color:#1565C0;">{selected_db or "Analytics"}</h1>
         {connected_badge}
         <span style="color:gray; font-size:0.9rem; font-family:Poppins,sans-serif;">
             | Powered by Techwish AI
@@ -1247,14 +1345,17 @@ st.markdown(f"""
     border: none;
     height: 1px;
     background: rgba(128,128,128,0.25);
-    margin: 0 0 1.5rem 0;
+    margin: 0.5rem 0 1rem 0;
     display: block;
     position: relative;
+    width: 100%;
 "/>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────
 #  VOICE ASSISTANT
+#  FIX: Blue color (#1565C0), visible on both light/dark themes,
+#       pointer-events enabled so clicks always register.
 # ─────────────────────────────────────────────────────────────────
 VOICE_COMPONENT_HTML = """
 <script>
@@ -1430,6 +1531,59 @@ for msg in st.session_state.messages:
                     chart_title=msg.get("chart_title", ""),
                     title_color=msg.get("title_color"),
                 )
+
+# ─────────────────────────────────────────────────────────────────
+#  EMPTY-STATE AI IMAGE
+#  • Truly centred in the space between header and chat bar
+#  • Auto-scales with viewport via CSS clamp()
+#  • A JS snippet measures & logs the rendered image pixel size
+# ─────────────────────────────────────────────────────────────────
+if not st.session_state.messages:
+    _welcome_icon = img_to_b64("ai_icon")   # ai_icon.png in the app folder
+    _icon_tag = (
+        f'<img id="tw-welcome-img" src="{_welcome_icon}" alt="AI Assistant" />'
+        if _welcome_icon
+        else '<span style="font-size:5rem; line-height:1;">🤖</span>'
+    )
+    st.markdown(
+        f"""
+        <div class="ai-welcome-img" id="tw-welcome-wrap">
+            {_icon_tag}
+            <p class="ai-welcome-caption">
+                Ask anything about your <strong>{selected_db}</strong> data
+            </p>
+        </div>
+        <script>
+        (function() {{
+            /* Wait for the image to finish rendering, then read its pixel size
+               and write it into the caption so the developer can see it.      */
+            var img = window.parent.document.getElementById('tw-welcome-img');
+            if (!img) return;
+            function report() {{
+                var w = Math.round(img.getBoundingClientRect().width);
+                var h = Math.round(img.getBoundingClientRect().height);
+                var cap = img.closest('.ai-welcome-img');
+                if (cap) {{
+                    var note = cap.querySelector('.tw-px-note');
+                    if (!note) {{
+                        note = document.createElement('span');
+                        note.className = 'tw-px-note';
+                        note.style.cssText = 'display:block;font-size:0.7rem;color:#888;'
+                            + 'font-family:Poppins,sans-serif;margin-top:4px;';
+                        cap.appendChild(note);
+                    }}
+                    note.textContent = 'Rendered size: ' + w + ' × ' + h + ' px';
+                }}
+            }}
+            if (img.complete) {{ report(); }}
+            else {{ img.addEventListener('load', report); }}
+            /* Also re-report on resize so you can see responsive behaviour */
+            window.addEventListener('resize', report);
+        }})();
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # ─────────────────────────────────────────────────────────────────
 #  CHAT PROCESSING
