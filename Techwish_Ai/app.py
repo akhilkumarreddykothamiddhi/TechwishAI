@@ -102,14 +102,10 @@ html, body, [class*="css"], .stApp, .stMarkdown, .stTextInput,
     color: #1565C0;
 }
 
-/* ── CHANGE 1: Chat-aligned content wrapper ──
-   Matches Streamlit's chat message left padding so the header
-   visually lines up with the dialogue bubbles.               */
 .main-content {
     padding: 0 1rem 0 1rem;
 }
 
-/* ── Header row that aligns with chat messages ── */
 .header-aligned {
     padding: 1rem 1rem 0 1rem;
 }
@@ -151,39 +147,32 @@ html, body, [class*="css"], .stApp, .stMarkdown, .stTextInput,
     vertical-align: middle;
 }
 
-/* ── Empty-state AI image — centred, no-scroll, auto-scale ──
-   position:fixed keeps the element OUT of the document flow so it
-   can never cause a scrollbar regardless of screen resolution.
-   The image itself is sized with clamp() + max() so it always fits
-   inside the available rectangle and never overflows.            */
+/* ── Empty-state AI image ──
+   Uses left:0/right:0 so it always centres in the full viewport
+   regardless of whether the sidebar is open or collapsed.
+   top:95px gives ~5px breathing room below the divider line.     */
 .ai-welcome-img {
-    position: fixed;           /* out of flow → zero scrollbar impact  */
-    top: 80px;                 /* clear header + divider               */
-    bottom: 72px;              /* clear chat-input bar                 */
-    left: max(300px, 21rem);   /* clear sidebar                        */
+    position: center;
+    top: 80px;
+    bottom: 55px;
+    left: 0;
     right: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    pointer-events: none;      /* don't block clicks on anything below */
+    pointer-events: auto;
     z-index: 0;
-    overflow: hidden;          /* belt-and-braces: never cause scroll   */
+    overflow: hidden;
+    flex-shrink: 0;
 }
 .ai-welcome-img img {
-    /*
-      Two clamp axes guarantee the image always fits the zone:
-        width  → min 120px, prefer 28vw, max 320px
-        height → min 120px, prefer 38vh, max 320px
-      object-fit:contain keeps aspect ratio intact with no cropping.
-      No fixed px, no border-radius, no overflow.
-    */
-    width:     clamp(120px, 28vw, 320px);
-    height:    clamp(120px, 38vh, 320px);
-    max-width:  calc(100% - 2rem);   /* safety margin on narrow windows */
-    max-height: calc(100% - 4rem);   /* safety margin if zone is short  */
-    object-fit: contain;
-    display: block;
+    width:     clamp(200px, 30vw, 210px);
+    height:    auto;
+    max-width:  auto;
+    max-height: auto;
+    object-fit: auto;
+    display: auto;
     flex-shrink: 0;
 }
 .ai-welcome-caption {
@@ -199,11 +188,7 @@ html, body, [class*="css"], .stApp, .stMarkdown, .stTextInput,
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────
-#  DATABASE CONNECTION  — persistent, non-expiring
-#  One connection is stored in st.session_state["_sf_conn"].
-#  Before every use we ping it with "SELECT 1"; if the ping fails
-#  we reconnect once — this prevents token-expiry lag without ever
-#  creating a new connection on a healthy session.
+#  DATABASE CONNECTION
 # ─────────────────────────────────────────────────────────────────
 def _build_conn_kwargs(database: str = None) -> dict:
     kw = dict(
@@ -211,9 +196,7 @@ def _build_conn_kwargs(database: str = None) -> dict:
         user=SNOWFLAKE_USER,
         password=SNOWFLAKE_PASSWORD,
         warehouse=SNOWFLAKE_WAREHOUSE,
-        # Keep the session alive server-side (heartbeat every 3 600 s)
         session_parameters={"CLIENT_SESSION_KEEP_ALIVE": "TRUE"},
-        # Network-level timeout — long enough for slow queries
         network_timeout=300,
         login_timeout=60,
     )
@@ -227,19 +210,17 @@ def _new_conn(database: str = None):
     return snowflake.connector.connect(**_build_conn_kwargs(database))
 
 def _get_conn() -> "snowflake.connector.connection.SnowflakeConnection":
-    """Return the live session-state connection, reconnecting only if dead."""
     conn = st.session_state.get("_sf_conn")
     if conn is not None:
         try:
-            conn.cursor().execute("SELECT 1")   # cheap ping
+            conn.cursor().execute("SELECT 1")
             return conn
         except Exception:
-            pass  # connection is dead — fall through and reconnect
+            pass
     conn = _new_conn()
     st.session_state["_sf_conn"] = conn
     return conn
 
-# Keep legacy alias so nothing else in the file breaks
 def _create_snowflake_conn(database: str = None):
     return _get_conn()
 
@@ -247,7 +228,6 @@ def get_snowflake_conn(database: str = None):
     return _get_conn()
 
 def run_query(sql: str, database: str) -> pd.DataFrame:
-    """Run SQL using the persistent connection; reconnect once on failure."""
     def _execute(conn):
         cur = conn.cursor()
         cur.execute(f'USE DATABASE "{database}"')
@@ -261,7 +241,6 @@ def run_query(sql: str, database: str) -> pd.DataFrame:
         return _execute(conn)
     except Exception as e:
         err = str(e)
-        # Any connectivity / auth error → reconnect once
         if any(x in err for x in ("08001", "390114", "Authentication token",
                                    "Connection", "connection", "session")):
             conn = _new_conn()
@@ -475,6 +454,64 @@ def detect_color_change_target(question: str) -> str:
 # ─────────────────────────────────────────────────────────────────
 def is_chart_request(text: str) -> bool:
     return any(k in text.lower() for k in ["chart","graph","plot","visualize","line","bar","pie","donut","seaborn","matplotlib","heatmap","violin","box"])
+
+# ─────────────────────────────────────────────────────────────────
+#  NUMBER FORMATTING — round floats to 0 dp, add currency symbol
+# ─────────────────────────────────────────────────────────────────
+# INR keywords in column name → ₹ prefix
+_INR_KEYWORDS = ["inr", "rupee", "rupees", "rs", "rs_", "_rs", "indian"]
+# Currency keywords → $ by default
+_CURRENCY_KEYWORDS = [
+    "amount", "revenue", "price", "salary", "cost", "fee", "total",
+    "earning", "earnings", "income", "profit", "loss", "budget",
+    "expense", "expenses", "payment", "payments", "value", "sales",
+    "turnover", "gross", "net", "usd", "dollar", "dollars",
+]
+
+def _get_currency_symbol(col_name: str) -> str | None:
+    """Return '$' or '₹' if column looks like a currency column, else None."""
+    c = col_name.lower()
+    if any(k in c for k in _INR_KEYWORDS):
+        return "₹"
+    if any(k in c for k in _CURRENCY_KEYWORDS):
+        return "$"
+    return None
+
+def format_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Round all numeric float columns to 0 decimal places.
+    Add currency prefix ($  or ₹) for currency-like columns.
+    Returns a display copy (strings); original df is unchanged.
+    """
+    display = df.copy()
+    for col in display.columns:
+        if pd.api.types.is_float_dtype(display[col]):
+            symbol = _get_currency_symbol(col)
+            rounded = display[col].round(0).astype("Int64", errors="ignore")
+            # Int64 may fail for NaN-heavy cols — fall back to object
+            try:
+                rounded = display[col].round(0).fillna(0).astype(int)
+            except Exception:
+                rounded = display[col].round(0)
+            if symbol:
+                display[col] = rounded.apply(
+                    lambda v: f"{symbol}{v:,}" if pd.notna(v) else ""
+                )
+            else:
+                display[col] = rounded.apply(
+                    lambda v: f"{v:,}" if pd.notna(v) else ""
+                )
+        elif pd.api.types.is_integer_dtype(display[col]):
+            symbol = _get_currency_symbol(col)
+            if symbol:
+                display[col] = display[col].apply(
+                    lambda v: f"{symbol}{v:,}" if pd.notna(v) else ""
+                )
+            else:
+                display[col] = display[col].apply(
+                    lambda v: f"{v:,}" if pd.notna(v) else ""
+                )
+    return display
 
 @st.cache_data(show_spinner=False)
 def get_sample_questions(database: str) -> list[str]:
@@ -1282,14 +1319,12 @@ if not selected_db:
     st.stop()
 
 # ─────────────────────────────────────────────────────────────────
-#  CHANGE 1 — Load ai_icon.png once as base64 for reuse
+#  LOAD AI ICON
 # ─────────────────────────────────────────────────────────────────
-_ai_icon_src = img_to_b64("ai_icon")   # looks for ai_icon.png / .jpg / etc.
+_ai_icon_src = img_to_b64("ai_icon")
 
 # ─────────────────────────────────────────────────────────────────
-#  CHANGE 2 — HEADER  (aligned with chat message dialogue box)
-#  • Replaces the 📊 emoji with ai_icon.png
-#  • Uses padding that matches Streamlit's chat container left edge
+#  HEADER
 # ─────────────────────────────────────────────────────────────────
 connected_badge = (
     '<span style="display:inline-flex; align-items:center; gap:5px; '
@@ -1298,7 +1333,6 @@ connected_badge = (
     'background:#2E7D32;"></span>Connected</span>'
 ) if selected_db else ''
 
-# Icon HTML — uses ai_icon.png if available, falls back to the chart emoji
 if _ai_icon_src:
     _db_icon_html = (
         f'<img src="{_ai_icon_src}" '
@@ -1307,7 +1341,6 @@ if _ai_icon_src:
 else:
     _db_icon_html = '<span style="font-size:1.6rem; line-height:1;">📊</span>'
 
-# The voice-input JS component still needs its 56 px iframe slot
 components.html("""
 <script>
 (function() {
@@ -1353,16 +1386,21 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────
-#  VOICE ASSISTANT
-#  FIX: Blue color (#1565C0), visible on both light/dark themes,
-#       pointer-events enabled so clicks always register.
+#  VOICE ASSISTANT — Cloud-compatible
+#  Renders entirely inside the iframe (no window.parent DOM write).
+#  Uses postMessage to send the transcript to the parent, where a
+#  second listener fills the Streamlit chat textarea.
+#  Mic icon is blue (#1565C0); recording state pulses red.
 # ─────────────────────────────────────────────────────────────────
 VOICE_COMPONENT_HTML = """
 <script>
 (function () {
   const targetDoc = window.parent ? window.parent.document : document;
 
-  if (targetDoc.getElementById('tw-mic-btn')) return;
+const existing = targetDoc.getElementById('tw-mic-btn');
+if (existing) existing.remove();
+const existingToast = targetDoc.getElementById('tw-voice-toast');
+if (existingToast) existingToast.remove();
 
   const style = targetDoc.createElement('style');
   style.textContent = `
@@ -1376,7 +1414,7 @@ VOICE_COMPONENT_HTML = """
       border: none;
       cursor: pointer;
       background: transparent;
-      color: #9ca3af;
+      color: #1565C0;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -1497,7 +1535,6 @@ VOICE_COMPONENT_HTML = """
 })();
 </script>
 """
-
 components.html(VOICE_COMPONENT_HTML, height=45, scrolling=False)
 
 # ─────────────────────────────────────────────────────────────────
@@ -1518,7 +1555,8 @@ for msg in st.session_state.messages:
             if msg.get("df") is not None:
                 df = pd.DataFrame(msg["df"])
                 if not df.empty:
-                    st.dataframe(df, use_container_width=True)
+                    display_df = format_dataframe(df)
+                    st.dataframe(display_df, use_container_width=True)
                     st.caption(f"{len(df)} row(s) returned")
             if msg.get("df") is not None and msg.get("chart", "none") != "none":
                 df = pd.DataFrame(msg["df"])
@@ -1534,12 +1572,11 @@ for msg in st.session_state.messages:
 
 # ─────────────────────────────────────────────────────────────────
 #  EMPTY-STATE AI IMAGE
-#  • Truly centred in the space between header and chat bar
-#  • Auto-scales with viewport via CSS clamp()
-#  • A JS snippet measures & logs the rendered image pixel size
+#  • left:0 / right:0  →  always centred regardless of sidebar
+#  • top:95px          →  ~5px gap below the top divider line
 # ─────────────────────────────────────────────────────────────────
 if not st.session_state.messages:
-    _welcome_icon = img_to_b64("ai_icon")   # ai_icon.png in the app folder
+    _welcome_icon = img_to_b64("ai_icon")
     _icon_tag = (
         f'<img id="tw-welcome-img" src="{_welcome_icon}" alt="AI Assistant" />'
         if _welcome_icon
@@ -1553,34 +1590,6 @@ if not st.session_state.messages:
                 Ask anything about your <strong>{selected_db}</strong> data
             </p>
         </div>
-        <script>
-        (function() {{
-            /* Wait for the image to finish rendering, then read its pixel size
-               and write it into the caption so the developer can see it.      */
-            var img = window.parent.document.getElementById('tw-welcome-img');
-            if (!img) return;
-            function report() {{
-                var w = Math.round(img.getBoundingClientRect().width);
-                var h = Math.round(img.getBoundingClientRect().height);
-                var cap = img.closest('.ai-welcome-img');
-                if (cap) {{
-                    var note = cap.querySelector('.tw-px-note');
-                    if (!note) {{
-                        note = document.createElement('span');
-                        note.className = 'tw-px-note';
-                        note.style.cssText = 'display:block;font-size:0.7rem;color:#888;'
-                            + 'font-family:Poppins,sans-serif;margin-top:4px;';
-                        cap.appendChild(note);
-                    }}
-                    note.textContent = 'Rendered size: ' + w + ' × ' + h + ' px';
-                }}
-            }}
-            if (img.complete) {{ report(); }}
-            else {{ img.addEventListener('load', report); }}
-            /* Also re-report on resize so you can see responsive behaviour */
-            window.addEventListener('resize', report);
-        }})();
-        </script>
         """,
         unsafe_allow_html=True,
     )
@@ -1632,7 +1641,8 @@ if "_pending_prompt" in st.session_state:
                 if df.empty:
                     st.info("Query ran successfully but returned no results.")
                 else:
-                    st.dataframe(df, use_container_width=True)
+                    display_df = format_dataframe(df)
+                    st.dataframe(display_df, use_container_width=True)
                     st.caption(f"{len(df)} row(s) returned")
                     if chart != "none":
                         resolved_x = resolve_chart_col(chart_x, list(df.columns))
