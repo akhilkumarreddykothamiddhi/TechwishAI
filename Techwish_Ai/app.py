@@ -1424,7 +1424,7 @@ if (existingToast) existingToast.remove();
       z-index: 99999;
       flex-shrink: 0;
     }
-    #tw-mic-btn:hover { color: #ffffff; background: rgba(255,255,255,0.1); }
+    #tw-mic-btn:hover { color: #D22630; background: rgba(255,255,255,0.1); }
     #tw-mic-btn.active { color: #E53935; animation: tw-pulse 1s infinite; }
     #tw-mic-btn svg { width: 20px; height: 20px; }
     @keyframes tw-pulse {
