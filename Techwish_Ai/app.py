@@ -1676,7 +1676,7 @@ _new_prompt = None
 
 if "_inject_question" in st.session_state:
     _new_prompt = st.session_state.pop("_inject_question")
-elif prompt := st.chat_input("Ask anything about your data..."):
+elif prompt := st.chat_input("Ask Techwish AI..."):
     _new_prompt = prompt
 
 if _new_prompt:
