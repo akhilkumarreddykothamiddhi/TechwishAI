@@ -5,6 +5,12 @@ import pandas as pd
 import plotly.express as px
 from groq import Groq
 import base64, pathlib, time
+import streamlit.components.v1 as components
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import seaborn as sns
+import io
 
 # ─────────────────────────────────────────────────────────────────
 #  CONFIGURATION
@@ -34,6 +40,7 @@ COMPANY_NAME = "Techwish AI — Analytics"
 #  DEFAULT CHART COLOR  (Blue theme)
 # ─────────────────────────────────────────────────────────────────
 DEFAULT_CHART_COLOR   = "#1565C0"
+DEFAULT_TITLE_COLOR   = "#1565C0"
 DEFAULT_BLUE_SEQUENCE = [
     "#1565C0", "#1976D2", "#1E88E5", "#42A5F5",
     "#90CAF9", "#BBDEFB", "#0D47A1", "#0288D1",
@@ -187,7 +194,7 @@ def load_schema(database: str) -> str:
         return f"Schema load failed: {e}"
 
 # ─────────────────────────────────────────────────────────────────
-#  WHITELIST BUILDER
+#  WHITELIST BUILDER (with full schema info)
 # ─────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def build_whitelist(database: str) -> dict[str, list[str]]:
@@ -204,6 +211,30 @@ def build_whitelist(database: str) -> dict[str, list[str]]:
             tbl = row["TABLE_NAME"]
             wl.setdefault(tbl, []).append(row["COLUMN_NAME"])
         return wl
+    except Exception as e:
+        return {}
+
+@st.cache_data(show_spinner=False)
+def build_full_schema_dict(database: str) -> dict:
+    """Build a comprehensive schema dictionary with exact column info"""
+    schema_sql = f"""
+        SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE
+        FROM {database}.INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA')
+        ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION
+    """
+    try:
+        df = run_query(schema_sql, database)
+        schema_dict = {}
+        for _, row in df.iterrows():
+            tbl = row["TABLE_NAME"].upper()
+            col = row["COLUMN_NAME"].upper()
+            dtype = row["DATA_TYPE"]
+            
+            if tbl not in schema_dict:
+                schema_dict[tbl] = {}
+            schema_dict[tbl][col] = dtype
+        return schema_dict
     except Exception as e:
         return {}
 
@@ -240,6 +271,7 @@ SQL_KEYWORDS = {
     "object_construct","array_construct","flatten","lateral","any_value",
     "listagg","median","mode","stddev","variance","corr","regr_slope",
     "approx_count_distinct","approx_percentile","approx_top_k",
+    "trunc","round","ceil","floor","abs","power","sqrt","log","exp","sin","cos",
     "n","no","yes","true","false","percent","null",
     "a","b","c","d","e","f","g","h","i","j","k","l","m",
     "o","p","q","r","s","t","u","v","w","x","y","z",
@@ -275,7 +307,7 @@ def validate_sql_against_whitelist(sql: str, wl: dict[str, list[str]]) -> tuple[
     return (len(bad) == 0), bad
 
 # ─────────────────────────────────────────────────────────────────
-#  COLOR EXTRACTION
+#  COLOR EXTRACTION  — with target detection (chart vs title)
 # ─────────────────────────────────────────────────────────────────
 COLOR_NAME_MAP = {
     "red": "#E53935", "green": "#43A047", "blue": "#1565C0",
@@ -291,6 +323,7 @@ COLOR_NAME_MAP = {
 }
 
 def extract_color_from_question(question: str) -> str | None:
+    """Extract any color from the question."""
     q = question.lower()
     hex_match = _re.search(r'#?([0-9a-fA-F]{6})\b', question)
     if hex_match:
@@ -300,11 +333,46 @@ def extract_color_from_question(question: str) -> str | None:
             return hex_val
     return None
 
+def detect_color_change_target(question: str) -> str:
+    """
+    Returns:
+      'title'  — user explicitly wants to change ONLY the title color
+      'chart'  — user explicitly wants to change ONLY the chart/bar color
+      'both'   — generic color change (applies to both)
+      'none'   — no color change requested
+    """
+    q = question.lower()
+    has_color = bool(extract_color_from_question(question))
+    if not has_color:
+        return "none"
+
+    title_pattern = bool(_re.search(
+        r'\btitle\s+(color|colour)\b'
+        r'|\b(color|colour)\s+(of\s+)?(the\s+)?title\b'
+        r'|\bchange\b.{0,20}\btitle\b.{0,20}\b(color|colour)\b'
+        r'|\b(color|colour)\b.{0,20}\btitle\b',
+        q
+    ))
+    chart_pattern = bool(_re.search(
+        r'\b(chart|bar|line|graph|plot|area|scatter|series)\s+(color|colour)\b'
+        r'|\b(color|colour)\s+(of\s+)?(the\s+)?(chart|bar|bars|line|graph|plot)\b'
+        r'|\bchange\b.{0,30}\b(chart|bar|bars|line|graph|plot)\b.{0,30}\b(color|colour)\b'
+        r'|\b(color|colour)\b.{0,20}\b(chart|bar|bars|line|graph|series)\b',
+        q
+    ))
+
+    if title_pattern and not chart_pattern:
+        return "title"
+    if chart_pattern and not title_pattern:
+        return "chart"
+    # Generic: "change color to red" / "make it blue" — both
+    return "both"
+
 # ─────────────────────────────────────────────────────────────────
 #  HELPER UTILS
 # ─────────────────────────────────────────────────────────────────
 def is_chart_request(text: str) -> bool:
-    return any(k in text.lower() for k in ["chart","graph","plot","visualize","line","bar","pie"])
+    return any(k in text.lower() for k in ["chart","graph","plot","visualize","line","bar","pie","donut","seaborn","matplotlib","heatmap","violin","box"])
 
 @st.cache_data(show_spinner=False)
 def get_sample_questions(database: str) -> list[str]:
@@ -407,9 +475,7 @@ def get_sample_questions(database: str) -> list[str]:
         ]
 
 # ─────────────────────────────────────────────────────────────────
-#  LOGO HELPER — server-side theme detection (from first code)
-#  Looks for file by EXACT name first, then tries common extensions.
-#  Searches: script directory, then cwd.
+#  LOGO HELPER
 # ─────────────────────────────────────────────────────────────────
 def img_to_b64(filename: str) -> str:
     search_bases = [pathlib.Path(__file__).parent, pathlib.Path(".")]
@@ -425,40 +491,96 @@ def img_to_b64(filename: str) -> str:
     return ""
 
 # ─────────────────────────────────────────────────────────────────
-#  NL → SQL  (Snowflake SQL dialect) — IMPROVED from second code
+#  ADVANCED COLUMN RESOLUTION
+# ─────────────────────────────────────────────────────────────────
+def find_date_columns(schema_dict: dict, table_name: str) -> list[str]:
+    """Find date/timestamp columns in a table"""
+    if table_name.upper() not in schema_dict:
+        return []
+    
+    tbl = schema_dict[table_name.upper()]
+    date_keywords = ['date', 'time', 'timestamp', 'datetime', 'created', 'updated', 'at']
+    date_cols = []
+    
+    for col_name, dtype in tbl.items():
+        col_lower = col_name.lower()
+        dtype_lower = dtype.lower()
+        
+        # Check data type
+        if any(k in dtype_lower for k in ['date', 'timestamp', 'time']):
+            date_cols.append(col_name)
+        # Check column name
+        elif any(col_lower.startswith(k) or col_lower.endswith(k) for k in date_keywords):
+            date_cols.append(col_name)
+    
+    return date_cols
+
+def find_numeric_columns(schema_dict: dict, table_name: str) -> list[str]:
+    """Find numeric columns suitable for aggregation"""
+    if table_name.upper() not in schema_dict:
+        return []
+    
+    tbl = schema_dict[table_name.upper()]
+    numeric_types = ['int', 'float', 'decimal', 'numeric', 'bigint', 'smallint', 'double', 'number']
+    numeric_cols = []
+    
+    for col_name, dtype in tbl.items():
+        dtype_lower = dtype.lower()
+        if any(nt in dtype_lower for nt in numeric_types):
+            numeric_cols.append(col_name)
+    
+    return numeric_cols
+
+def find_text_columns(schema_dict: dict, table_name: str) -> list[str]:
+    """Find text columns suitable for grouping"""
+    if table_name.upper() not in schema_dict:
+        return []
+    
+    tbl = schema_dict[table_name.upper()]
+    text_types = ['varchar', 'char', 'text', 'string']
+    text_cols = []
+    
+    for col_name, dtype in tbl.items():
+        dtype_lower = dtype.lower()
+        if any(tt in dtype_lower for tt in text_types):
+            text_cols.append(col_name)
+    
+    return text_cols
+
+# ─────────────────────────────────────────────────────────────────
+#  NL → SQL  (Snowflake SQL dialect) - ENHANCED VERSION
 # ─────────────────────────────────────────────────────────────────
 def nl_to_sql(question: str, history: list, database: str) -> dict:
     wl = build_whitelist(database)
+    schema_dict = build_full_schema_dict(database)
     strict_block = whitelist_to_strict_block(wl)
     compact_block = "\n".join(
         f"  {tbl}: {', '.join(cols)}"
         for tbl, cols in wl.items()
     )
-    # Capture last assistant response for follow-up context
-    last_sql         = ""
-    last_chart       = "none"
-    last_chart_x     = ""
-    last_chart_y     = ""
-    last_chart_title = ""
-    last_chart_color = None
-    last_summary     = ""
-    last_df          = None
+    
+    last_sql          = ""
+    last_chart        = "none"
+    last_chart_x      = ""
+    last_chart_y      = ""
+    last_chart_title  = ""
+    last_chart_color  = None
+    last_title_color  = None
+    last_summary      = ""
+    last_df           = None
     for m in reversed(history):
         if m.get("role") == "assistant" and m.get("sql"):
-            last_sql         = m["sql"]
-            last_chart       = m.get("chart", "none")
-            last_chart_x     = m.get("chart_x", "")
-            last_chart_y     = m.get("chart_y", "")
-            last_chart_title = m.get("chart_title", "")
-            last_chart_color = m.get("chart_color")
-            last_summary     = m.get("summary", "")
-            last_df          = m.get("df")
+            last_sql          = m["sql"]
+            last_chart        = m.get("chart", "none")
+            last_chart_x      = m.get("chart_x", "")
+            last_chart_y      = m.get("chart_y", "")
+            last_chart_title  = m.get("chart_title", "")
+            last_chart_color  = m.get("chart_color")
+            last_title_color  = m.get("title_color")
+            last_summary      = m.get("summary", "")
+            last_df           = m.get("df")
             break
 
-    # ── APPEARANCE-ONLY SHORT-CIRCUIT ──────────────────────────────
-    # Detect requests that ONLY change color / chart-type / title.
-    # These must NOT trigger a new SQL query — just patch chart fields.
-    # ───────────────────────────────────────────────────────────────
     _q = question.strip().lower()
 
     _COLOR_ONLY = bool(_re.search(
@@ -471,8 +593,8 @@ def nl_to_sql(question: str, history: list, database: str) -> dict:
     ))
     _CHART_TYPE = bool(_re.search(
         r'\b(make|change|convert|switch|turn)\b.{0,30}'
-        r'\b(bar|line|pie|area|scatter|donut|histogram|funnel|treemap|sunburst)\b'
-        r'|\b(bar|line|pie|area|scatter|donut|histogram|funnel|treemap|sunburst)\s+chart\b',
+        r'\b(bar|line|pie|area|scatter|donut|histogram|funnel|treemap|sunburst|heatmap|violin|box|seaborn|matplotlib)\b'
+        r'|\b(bar|line|pie|area|scatter|donut|histogram|funnel|treemap|sunburst|heatmap|violin|box)\s+chart\b',
         _q
     ))
     _TITLE_ONLY = bool(_re.search(
@@ -483,14 +605,32 @@ def nl_to_sql(question: str, history: list, database: str) -> dict:
     _is_appearance_only = last_sql and (_COLOR_ONLY or _CHART_TYPE or _TITLE_ONLY)
 
     if _is_appearance_only:
-        new_color = extract_color_from_question(question) or last_chart_color
+        extracted_color = extract_color_from_question(question)
+        color_target    = detect_color_change_target(question)
+
+        new_chart_color = last_chart_color
+        new_title_color = last_title_color
+
+        if extracted_color:
+            if color_target == "both":
+                new_chart_color = extracted_color
+                new_title_color = extracted_color
+            elif color_target == "chart":
+                new_chart_color = extracted_color
+            elif color_target == "title":
+                new_title_color = extracted_color
 
         new_chart = last_chart
         _ct_match = _re.search(
-            r'\b(bar|line|pie|area|scatter|donut|histogram|funnel|treemap|sunburst)\b', _q
+            r'\b(bar|line|pie|area|scatter|donut|histogram|funnel|treemap|sunburst|heatmap|violin|box|seaborn_bar|seaborn_line|seaborn_heatmap|seaborn_violin|seaborn_box|matplotlib_bar|matplotlib_line|matplotlib_pie|matplotlib_hist)\b', _q
         )
         if _ct_match:
-            new_chart = _ct_match.group(1)
+            ct = _ct_match.group(1)
+            if "seaborn" in _q and ct in ("bar","line","heatmap","violin","box"):
+                ct = f"seaborn_{ct}"
+            elif "matplotlib" in _q and ct in ("bar","line","pie","hist","histogram"):
+                ct = f"matplotlib_{ct}" if ct != "histogram" else "matplotlib_hist"
+            new_chart = ct
 
         new_title = last_chart_title
         _title_match = _re.search(r'title\s+to\s+["\']?(.+?)["\']?\s*$', _q)
@@ -498,93 +638,122 @@ def nl_to_sql(question: str, history: list, database: str) -> dict:
             new_title = _title_match.group(1).strip().strip("\"'")
 
         return {
-            "sql":        last_sql,
-            "summary":    last_summary,
-            "chart":      new_chart,
-            "chart_x":    last_chart_x,
-            "chart_y":    last_chart_y,
+            "sql":         last_sql,
+            "summary":     last_summary,
+            "chart":       new_chart,
+            "chart_x":     last_chart_x,
+            "chart_y":     last_chart_y,
             "chart_title": new_title,
-            "chart_color": new_color,
-            "_reuse_df":  last_df,
+            "chart_color": new_chart_color,
+            "title_color": new_title_color,
+            "_reuse_df":   last_df,
         }
-    # ── END APPEARANCE-ONLY SHORT-CIRCUIT ──────────────────────────
 
-    system_prompt = f"""You are an expert business intelligence assistant and strict Snowflake SQL query generator
-for Snowflake database: "{database}".
+    system_prompt = f"""You are an expert business intelligence assistant and STRICT Snowflake SQL query generator.
 
 ════════════════════════════════════════════════════════
-STEP 1 — UNDERSTAND THE USER'S BUSINESS INTENT
+CRITICAL INSTRUCTIONS FOR COLUMN & TABLE ACCURACY
 ════════════════════════════════════════════════════════
-The user asks questions in plain English without knowing table or column names.
-YOUR JOB is to:
-  1. Read the user's question and understand what business concept they care about.
-  2. Scan the schema below to find the BEST matching table(s) and column(s).
-  3. Write Snowflake SQL using ONLY the exact names found in the schema.
+1. EXACT MATCHING: Copy table and column names EXACTLY as they appear in the schema.
+2. CASE SENSITIVITY: Snowflake identifiers are case-insensitive but you MUST use the exact names from schema.
+3. NO GUESSING: If uncertain about a column name, ask the user or use generic aggregates.
+4. VERIFY EXISTENCE: Check the numbered list before writing any SQL.
 
 ════════════════════════════════════════════════════════
-STEP 2 — THE COMPLETE SCHEMA (EXACT NAMES, LIVE FROM DB)
+DATABASE SCHEMA (EXACT NAMES — NO CHANGES)
 ════════════════════════════════════════════════════════
 {strict_block}
 
-ABSOLUTE IDENTIFIER RULES — NO EXCEPTIONS:
-✗ Do NOT use any table or column name not listed above.
-✗ Do NOT guess, abbreviate, pluralize, or invent names.
-✓ Copy column names character-for-character from the numbered list.
-✓ If no relevant table/column exists → set sql to "" and explain.
+ABSOLUTE RULES:
+✗ Do NOT modify, abbreviate, pluralize, or rename any identifier
+✓ Copy names character-for-character from the numbered list above
+✓ If no exact match exists → return sql as "" and explain
 
 ════════════════════════════════════════════════════════
-STEP 3 — SNOWFLAKE SQL RULES
+TIME SERIES & DATE HANDLING — SNOWFLAKE SPECIFICS
 ════════════════════════════════════════════════════════
-- Snowflake SQL syntax only. Use LIMIT N, NOT TOP N.
-- Column and table names are case-insensitive in Snowflake — use them as-is.
-- Always alias tables (e.g. FROM CUSTOMERS c).
-- Prefix all column references with alias when joins are present.
-- Always GROUP BY non-aggregated columns when using COUNT/SUM/AVG/MIN/MAX.
-- Use explicit column names. Never SELECT *.
-- For "top N" → use ORDER BY col DESC LIMIT N.
-- For date functions: use DATETRUNC, DATE_TRUNC, DATEDIFF (Snowflake style).
-- For string functions: use IFF, COALESCE, ZEROIFNULL, NVL as needed.
-- Use double quotes around identifiers ONLY if they contain special characters.
+DATE FUNCTIONS (case-insensitive):
+- DATE_TRUNC('period', date_col): Truncates date to period (year, month, week, day, hour)
+- DATEADD('unit', num, date_col): Add/subtract time. Units: year, month, week, day, hour, minute, second
+- DATEDIFF('unit', start_date, end_date): Calculate difference between dates
+- CURRENT_DATE: Today's date (no parentheses)
+- EXTRACT('unit' FROM date_col): Extract year, month, day, quarter, week, dayofweek, etc.
+- TO_DATE(string): Convert string to date
+
+TIME SERIES BEST PRACTICES:
+- For "trends": GROUP BY DATE_TRUNC('month', date_col) or DATE_TRUNC('day', date_col)
+- For "this period": WHERE date_col >= DATE_TRUNC('month', CURRENT_DATE)
+- For "last N days": WHERE date_col >= DATEADD('day', -N, CURRENT_DATE)
+- For "year-over-year": Use WHERE YEAR(date_col) = YEAR(CURRENT_DATE) - 1
+- For "monthly breakdown": SELECT DATE_TRUNC('month', date_col) AS month, SUM(amount) ... GROUP BY 1 ORDER BY 1
+- For "daily trend": SELECT DATE(date_col) AS day, COUNT(*) ... GROUP BY 1 ORDER BY 1 DESC
+- Always alias date expressions: DATE_TRUNC('month', date_col) AS month_bucket
+
+EXAMPLES:
+- "Revenue last 7 days": 
+  SELECT DATE(date_col) AS day, SUM(amount) AS revenue 
+  FROM table WHERE date_col >= DATEADD('day', -7, CURRENT_DATE)
+  GROUP BY 1 ORDER BY 1 DESC
+
+- "Monthly trend this year":
+  SELECT DATE_TRUNC('month', date_col) AS month, COUNT(*) AS cnt
+  FROM table WHERE date_col >= DATE_TRUNC('year', CURRENT_DATE)
+  GROUP BY 1 ORDER BY 1
 
 ════════════════════════════════════════════════════════
-STEP 4 — FOLLOW-UP QUERY HANDLING
+SNOWFLAKE SQL RULES
 ════════════════════════════════════════════════════════
-Last SQL in this conversation:
-{last_sql if last_sql else "(none — this is the first query)"}
+- Use LIMIT N (NOT TOP N)
+- Column/table names are case-insensitive → use exact names from schema
+- Always alias tables: FROM CUSTOMERS c, FROM ORDERS o
+- Prefix column refs with alias when joins present: c.customer_id, o.order_date
+- GROUP BY all non-aggregated columns when using COUNT/SUM/AVG/MIN/MAX
+- Never SELECT * — always list explicit columns
+- Use ORDER BY col DESC LIMIT N for "top N"
+- For strings: ILIKE for case-insensitive, || for concat
+- For nulls: COALESCE(col, 0) or ISNULL(col, default_value)
+- Use explicit JOIN syntax (INNER JOIN, LEFT JOIN, etc.)
 
-If the new question is a modification → edit ONLY the last SQL.
-If it's a new topic → write a fresh query.
+════════════════════════════════════════════════════════
+FOLLOW-UP QUERY HANDLING
+════════════════════════════════════════════════════════
+Last SQL: {last_sql if last_sql else "(none — first query)"}
+
+If new question modifies last query → edit ONLY that query
+If new topic → write fresh query
 
 ════════════════════════════════════════════════════════
-STEP 5 — CHART TITLE
+CHART TITLE EXTRACTION
 ════════════════════════════════════════════════════════
-- If the user explicitly mentions a chart title, extract that exact title.
-- Otherwise, generate a short descriptive chart title.
-- Always populate "chart_title" in the output JSON.
+- If user mentions explicit title → use that exact title
+- Otherwise → generate SHORT descriptive title (5-8 words max)
+- Always populate "chart_title" field
 
 ════════════════════════════════════════════════════════
 OUTPUT — RAW JSON ONLY. NO MARKDOWN. NO CODE FENCES.
 ════════════════════════════════════════════════════════
 {{
-  "sql": "SELECT ...",
-  "summary": "One sentence business insight in plain English",
-  "chart": "bar|line|pie|scatter|area|histogram|none",
+  "sql": "SELECT ... FROM ... WHERE ...",
+  "summary": "One sentence business insight in plain English (no SQL jargon)",
+  "chart": "bar|line|pie|donut|scatter|area|histogram|seaborn_bar|none|...",
   "chart_x": "exact_column_name",
   "chart_y": "exact_column_name",
-  "chart_title": "Short descriptive title for the chart"
+  "chart_title": "Short title (if chart != none)"
 }}
 """
 
-    user_message = f"""AVAILABLE TABLES AND COLUMNS (copy names exactly):
+    user_message = f"""AVAILABLE TABLES AND COLUMNS (copy names EXACTLY):
 {compact_block}
 
 USER QUESTION: {question}
 
-Instructions:
-- Infer which table(s) best match the question's topic.
-- Use ONLY the column names listed above.
-- Do not mention table names in the summary.
-- If user mentions a chart title, extract it. Otherwise write a short descriptive title.
+INSTRUCTIONS:
+1. Identify which table(s) best match the business intent
+2. Find the EXACT column names from the list above
+3. Write proper Snowflake SQL using ONLY those exact names
+4. For time-series queries: use DATE_TRUNC and DATEADD appropriately
+5. Always generate a descriptive chart title
+6. Output ONLY valid JSON with no explanation or markdown
 """
 
     def call_groq(extra_instruction: str = "") -> dict:
@@ -650,6 +819,7 @@ Instructions:
             "chart_y": "",
             "chart_title": "",
             "chart_color": None,
+            "title_color": None,
         }
     except Exception as e:
         return {
@@ -660,35 +830,42 @@ Instructions:
             "chart_y": "",
             "chart_title": "",
             "chart_color": None,
+            "title_color": None,
         }
 
-    sql        = result.get("sql", "").strip()
-    user_color = extract_color_from_question(question)
-    result["chart_color"] = user_color or result.get("chart_color") or None
+    sql = result.get("sql", "").strip()
+
+    extracted_color = extract_color_from_question(question)
+    result["chart_color"] = extracted_color or result.get("chart_color") or None
+    result["title_color"] = None
 
     is_valid, bad_cols = validate_sql_against_whitelist(sql, wl)
     if not is_valid and sql:
         bad_list = ", ".join(bad_cols)
         correction = f"""
-⛔ SELF-CORRECTION REQUIRED:
-Your SQL used these identifiers that DO NOT EXIST in the schema: [{bad_list}]
+⛔ VALIDATION FAILED - COLUMN/TABLE NAMES DO NOT MATCH SCHEMA:
+Your SQL referenced: [{bad_list}]
 
-Go back to the numbered column list in the system prompt.
-Find the EXACT correct column names for what the user asked.
-Rewrite the query using ONLY those exact names.
-If no valid columns exist → return sql as empty string "".
+These identifiers are NOT in the schema. You MUST:
+1. Check the numbered column list above
+2. Find the EXACT correct name (copy character-by-character)
+3. Rewrite query using ONLY schema names
+4. If no valid columns → return sql as empty string ""
+
+DO NOT GUESS. Use EXACT names from the numbered list only.
 """
         try:
             result = call_groq(extra_instruction=correction)
-            result["chart_color"] = user_color
+            result["chart_color"] = extracted_color
+            result["title_color"] = None
             sql = result.get("sql", "").strip()
             is_valid2, bad_cols2 = validate_sql_against_whitelist(sql, wl)
             if not is_valid2 and sql:
                 result["sql"]     = ""
                 result["summary"] = (
-                    f"I couldn't generate a valid query — the columns needed "
+                    f"I couldn't generate a valid query — the columns "
                     f"({', '.join(bad_cols2)}) don't exist in the schema. "
-                    "Please rephrase your question or check the schema in the sidebar."
+                    "Please rephrase your question or check the sidebar schema."
                 )
                 result["chart"] = "none"
         except RuntimeError as rate_err:
@@ -703,7 +880,7 @@ If no valid columns exist → return sql as empty string "".
     return result
 
 # ─────────────────────────────────────────────────────────────────
-#  COLUMN RESOLVER — fixes LLM alias/case mismatches on chart axes
+#  COLUMN RESOLVER
 # ─────────────────────────────────────────────────────────────────
 def resolve_chart_col(col: str, df_columns: list) -> str:
     if not col:
@@ -726,8 +903,13 @@ def resolve_chart_col(col: str, df_columns: list) -> str:
     return col
 
 # ─────────────────────────────────────────────────────────────────
-#  CHART RENDERER
+#  CHART RENDERER  — Plotly + Seaborn + Matplotlib
 # ─────────────────────────────────────────────────────────────────
+def _effective_title_color(chart_color: str | None, title_color: str | None) -> str:
+    if title_color:
+        return title_color
+    return chart_color if chart_color else DEFAULT_CHART_COLOR
+
 def render_chart(
     df: pd.DataFrame,
     chart_type: str,
@@ -735,16 +917,29 @@ def render_chart(
     y: str,
     chart_color: str | None = None,
     chart_title: str = "",
+    title_color: str | None = None,
 ):
-    if chart_type == "none" or not x or not y:
-        return
-    if x not in df.columns or (y not in df.columns and chart_type not in ["histogram", "pie"]):
-        st.warning(f"Chart columns '{x}' or '{y}' not found in results.")
+    if chart_type == "none" or not x:
         return
 
-    single_color = chart_color if chart_color else DEFAULT_CHART_COLOR
-    seq_colors   = [chart_color] + DEFAULT_BLUE_SEQUENCE if chart_color else DEFAULT_BLUE_SEQUENCE
-    title_color  = chart_color if chart_color else "#1565C0"
+    single_color   = chart_color if chart_color else DEFAULT_CHART_COLOR
+    seq_colors     = [chart_color] + DEFAULT_BLUE_SEQUENCE if chart_color else DEFAULT_BLUE_SEQUENCE
+    eff_title_color = _effective_title_color(chart_color, title_color)
+
+    if chart_type.startswith("seaborn_"):
+        _render_seaborn(df, chart_type, x, y, single_color, chart_title, eff_title_color)
+        return
+
+    if chart_type.startswith("matplotlib_"):
+        _render_matplotlib(df, chart_type, x, y, single_color, seq_colors, chart_title, eff_title_color)
+        return
+
+    if y and y not in df.columns and chart_type not in ["histogram", "pie", "donut"]:
+        st.warning(f"Chart column '{y}' not found in results.")
+        return
+    if x not in df.columns:
+        st.warning(f"Chart column '{x}' not found in results.")
+        return
 
     try:
         common_kwargs = dict(title=chart_title) if chart_title else {}
@@ -759,7 +954,7 @@ def render_chart(
         elif chart_type == "pie":
             fig = px.pie(df, names=x, values=y, color_discrete_sequence=seq_colors, **common_kwargs)
         elif chart_type == "donut":
-            fig = px.pie(df, names=x, values=y, hole=0.4, color_discrete_sequence=seq_colors, **common_kwargs)
+            fig = px.pie(df, names=x, values=y, hole=0.45, color_discrete_sequence=seq_colors, **common_kwargs)
         elif chart_type == "histogram":
             fig = px.histogram(df, x=x, color_discrete_sequence=[single_color], **common_kwargs)
         elif chart_type == "box":
@@ -783,13 +978,153 @@ def render_chart(
             yaxis=dict(showgrid=True, gridcolor="rgba(200,200,200,0.2)"),
             title=dict(
                 text=chart_title,
-                font=dict(family="Poppins", size=15, color=title_color),
+                font=dict(family="Poppins", size=15, color=eff_title_color),
                 x=0.02,
             ) if chart_title else {},
         )
         st.plotly_chart(fig, use_container_width=True)
     except Exception as e:
         st.warning(f"Could not render {chart_type} chart: {e}")
+
+
+def _render_seaborn(
+    df: pd.DataFrame,
+    chart_type: str,
+    x: str,
+    y: str,
+    color: str,
+    title: str,
+    title_color: str,
+):
+    try:
+        sns.set_theme(style="darkgrid")
+        fig, ax = plt.subplots(figsize=(10, 5))
+        fig.patch.set_alpha(0.0)
+        ax.patch.set_alpha(0.0)
+
+        if chart_type == "seaborn_bar":
+            if x in df.columns and y in df.columns:
+                sns.barplot(data=df, x=x, y=y, color=color, ax=ax)
+            else:
+                sns.countplot(data=df, x=x, color=color, ax=ax)
+
+        elif chart_type == "seaborn_line":
+            sns.lineplot(data=df, x=x, y=y, color=color, marker="o", ax=ax)
+
+        elif chart_type == "seaborn_heatmap":
+            numeric_df = df.select_dtypes(include="number")
+            if numeric_df.shape[1] >= 2:
+                corr = numeric_df.corr()
+                sns.heatmap(corr, annot=True, fmt=".2f", cmap="Blues", ax=ax,
+                            linewidths=0.5, linecolor="rgba(200,200,200,0.2)")
+            else:
+                sns.barplot(data=df, x=x, y=y, color=color, ax=ax)
+
+        elif chart_type == "seaborn_violin":
+            if y in df.columns:
+                sns.violinplot(data=df, x=x, y=y, color=color, ax=ax)
+            else:
+                sns.violinplot(data=df, y=x, color=color, ax=ax)
+
+        elif chart_type == "seaborn_box":
+            if y in df.columns:
+                sns.boxplot(data=df, x=x, y=y, color=color, ax=ax)
+            else:
+                sns.boxplot(data=df, y=x, color=color, ax=ax)
+
+        else:
+            sns.barplot(data=df, x=x, y=y, color=color, ax=ax)
+
+        if title:
+            ax.set_title(title, fontsize=14, color=title_color, fontweight="bold", pad=12)
+
+        ax.tick_params(colors="gray", labelsize=9)
+        ax.xaxis.label.set_color("gray")
+        ax.yaxis.label.set_color("gray")
+        for spine in ax.spines.values():
+            spine.set_edgecolor("rgba(100,100,100,0.3)")
+
+        plt.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", transparent=True)
+        buf.seek(0)
+        st.image(buf, use_container_width=True)
+        plt.close(fig)
+    except Exception as e:
+        st.warning(f"Could not render seaborn chart: {e}")
+
+
+def _render_matplotlib(
+    df: pd.DataFrame,
+    chart_type: str,
+    x: str,
+    y: str,
+    color: str,
+    seq_colors: list,
+    title: str,
+    title_color: str,
+):
+    try:
+        fig, ax = plt.subplots(figsize=(10, 5))
+        fig.patch.set_alpha(0.0)
+        ax.patch.set_alpha(0.0)
+
+        if chart_type == "matplotlib_bar":
+            x_vals = df[x].astype(str).tolist()
+            y_vals = df[y].tolist() if y in df.columns else [0] * len(x_vals)
+            bars = ax.bar(x_vals, y_vals, color=color, width=0.6, edgecolor="none")
+            ax.set_xlabel(x, color="gray", fontsize=9)
+            ax.set_ylabel(y if y else "", color="gray", fontsize=9)
+            plt.xticks(rotation=30, ha="right", fontsize=8, color="gray")
+            plt.yticks(fontsize=8, color="gray")
+
+        elif chart_type == "matplotlib_line":
+            x_vals = df[x].astype(str).tolist()
+            y_vals = df[y].tolist() if y in df.columns else [0] * len(x_vals)
+            ax.plot(x_vals, y_vals, color=color, marker="o", linewidth=2, markersize=5)
+            ax.set_xlabel(x, color="gray", fontsize=9)
+            ax.set_ylabel(y if y else "", color="gray", fontsize=9)
+            plt.xticks(rotation=30, ha="right", fontsize=8, color="gray")
+            plt.yticks(fontsize=8, color="gray")
+
+        elif chart_type == "matplotlib_pie":
+            labels = df[x].astype(str).tolist()
+            vals   = df[y].tolist() if y in df.columns else [1] * len(labels)
+            wedge_colors = (seq_colors * ((len(labels) // len(seq_colors)) + 1))[:len(labels)]
+            ax.pie(vals, labels=labels, colors=wedge_colors,
+                   autopct="%1.1f%%", startangle=140,
+                   textprops={"color": "gray", "fontsize": 8})
+            ax.axis("equal")
+
+        elif chart_type == "matplotlib_hist":
+            vals = df[x].dropna().tolist()
+            ax.hist(vals, color=color, edgecolor="none", bins=20)
+            ax.set_xlabel(x, color="gray", fontsize=9)
+            ax.set_ylabel("Frequency", color="gray", fontsize=9)
+            plt.xticks(fontsize=8, color="gray")
+            plt.yticks(fontsize=8, color="gray")
+
+        else:
+            x_vals = df[x].astype(str).tolist()
+            y_vals = df[y].tolist() if y in df.columns else [0] * len(x_vals)
+            ax.bar(x_vals, y_vals, color=color, width=0.6, edgecolor="none")
+
+        if title:
+            ax.set_title(title, fontsize=14, color=title_color, fontweight="bold", pad=12)
+
+        ax.tick_params(colors="gray")
+        for spine in ax.spines.values():
+            spine.set_edgecolor("rgba(100,100,100,0.3)")
+        ax.grid(axis="y", color="rgba(200,200,200,0.15)", linestyle="--", linewidth=0.5)
+
+        plt.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", transparent=True)
+        buf.seek(0)
+        st.image(buf, use_container_width=True)
+        plt.close(fig)
+    except Exception as e:
+        st.warning(f"Could not render matplotlib chart: {e}")
 
 # ─────────────────────────────────────────────────────────────────
 #  SESSION STATE
@@ -800,15 +1135,14 @@ if "selected_db" not in st.session_state:
     st.session_state.selected_db = None
 
 # ─────────────────────────────────────────────────────────────────
-#  SIDEBAR — dynamic logo via server-side theme detection (first code)
+#  SIDEBAR
 # ─────────────────────────────────────────────────────────────────
 with st.sidebar:
-    # Detect Streamlit's active theme server-side (reruns on theme change)
     try:
         _active_theme = st.context.theme.get("base", "light")
     except Exception:
         try:
-            import tomllib  # Python 3.11+
+            import tomllib
         except ImportError:
             import tomli as tomllib
         try:
@@ -867,17 +1201,6 @@ with st.sidebar:
             st.session_state.messages = []
             st.session_state.selected_db = selected_db
 
-        # # Green dot "Connected" indicator
-        # st.markdown(
-        #     f'<p style="margin-top:4px; font-size:0.75rem; font-family:Poppins,sans-serif; color:gray;">'
-        #     f'<span style="display:inline-block; width:8px; height:8px; border-radius:50%; '
-        #     f'background:#2E7D32; margin-right:5px; vertical-align:middle;"></span>'
-        #     f'<span style="vertical-align:middle; color:#2E7D32; font-weight:500;">Connected</span>'
-        #     f'&nbsp;·&nbsp;{selected_db}'
-        #     f'</p>',
-        #     unsafe_allow_html=True,
-        # )
-
     st.divider()
 
     if selected_db:
@@ -934,6 +1257,195 @@ if not selected_db:
     st.stop()
 
 # ─────────────────────────────────────────────────────────────────
+#  VOICE ASSISTANT — MIC BUTTON NEXT TO CHAT INPUT BOX
+# ─────────────────────────────────────────────────────────────────
+VOICE_COMPONENT_HTML = """
+<script>
+(function () {
+  const targetDoc = window.parent ? window.parent.document : document;
+
+  if (targetDoc.getElementById('tw-mic-btn')) return;
+
+  // ── Styles ──
+  const style = targetDoc.createElement('style');
+  style.textContent = `
+    #tw-mic-btn {
+      position: fixed;
+      bottom: 65px;
+      right: 128px;
+      width: 40px;
+      height: 40px;
+      border-radius: 49%;
+      border: none;
+      cursor: pointer;
+      background: transparent;
+      color: #9ca3af;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      padding: 0;
+      outline: none;
+      z-index: 99999;
+      flex-shrink: 0;
+    }
+    #tw-mic-btn:hover {
+      color: #ffffff;
+      background: rgba(255,255,255,0.1);
+    }
+    #tw-mic-btn.active {
+      color: #E53935;
+      animation: tw-pulse 1s infinite;
+    }
+    #tw-mic-btn svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    @keyframes tw-pulse {
+      0%   { opacity: 1; }
+      50%  { opacity: 0.4; }
+      100% { opacity: 1; }
+    }
+
+    #tw-voice-toast {
+      position: fixed;
+      bottom: 60px;
+      right: 52px;
+      z-index: 99999;
+      background: rgba(20,20,20,0.92);
+      color: #fff;
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.75rem;
+      padding: 8px 12px;
+      border-radius: 6px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.3s;
+      white-space: nowrap;
+    }
+    #tw-voice-toast.show { opacity: 1; }
+  `;
+  targetDoc.head.appendChild(style);
+
+  // ── Mic SVG ──
+  const MIC_ICON = `
+    <svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v6a2 2 0 1 0 4 0V5a2 2 0 0 0-2-2z"/>
+      <path d="M19 11a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 0 0-2 0 7 7 0 0 0 6 6.93V20H9a1 1 0 0 0 0 2h6a1 1 0 0 0 0-2h-2v-2.07A7 7 0 0 0 19 11z"/>
+    </svg>`;
+
+  const STOP_ICON = `
+    <svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+      <rect x="6" y="6" width="12" height="12" rx="2"/>
+    </svg>`;
+
+  // ── Button ──
+  const btn = targetDoc.createElement('button');
+  btn.id = 'tw-mic-btn';
+  btn.title = 'Click to speak your question';
+  btn.innerHTML = MIC_ICON;
+  targetDoc.body.appendChild(btn);
+
+  // ── Toast ──
+  const toast = targetDoc.createElement('div');
+  toast.id = 'tw-voice-toast';
+  targetDoc.body.appendChild(toast);
+
+  // ── Browser support ──
+  const SpeechRecognition =
+    window.parent.SpeechRecognition || window.parent.webkitSpeechRecognition ||
+    window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  if (!SpeechRecognition) {
+    btn.title = 'Voice input not supported (try Chrome)';
+    btn.style.opacity = '0.35';
+    btn.style.cursor  = 'not-allowed';
+    btn.onclick = () => showToast('⚠️ Voice not supported — use Chrome/Edge', 3000);
+    return;
+  }
+
+  const recognition = new SpeechRecognition();
+  recognition.lang            = 'en-US';
+  recognition.interimResults  = false;
+  recognition.maxAlternatives = 1;
+  recognition.continuous      = false;
+
+  let isListening = false;
+
+  function showToast(msg, duration) {
+    toast.textContent = msg;
+    toast.classList.add('show');
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => toast.classList.remove('show'), duration || 2500);
+  }
+
+  function startListening() {
+    recognition.start();
+    isListening = true;
+    btn.classList.add('active');
+    btn.innerHTML = STOP_ICON;
+    btn.title = 'Listening… click to stop';
+    showToast('🎙️ Listening…', 60000);
+  }
+
+  function stopListening() {
+    recognition.stop();
+  }
+
+  btn.addEventListener('click', () => {
+    if (isListening) stopListening();
+    else startListening();
+  });
+
+  recognition.onend = () => {
+    isListening = false;
+    btn.classList.remove('active');
+    btn.innerHTML = MIC_ICON;
+    btn.title = 'Click to speak your question';
+    toast.classList.remove('show');
+  };
+
+  recognition.onerror = (e) => {
+    isListening = false;
+    btn.classList.remove('active');
+    btn.innerHTML = MIC_ICON;
+    const msgs = {
+      'not-allowed':   '🚫 Permission denied',
+      'no-speech':     '🔇 No speech detected',
+      'audio-capture': '🎙️ No microphone',
+      'network':       '🌐 Network error',
+    };
+    showToast(msgs[e.error] || `⚠️ ${e.error}`, 3500);
+  };
+
+  recognition.onresult = (e) => {
+    const transcript = e.results[0][0].transcript.trim();
+    if (!transcript) return;
+
+    const textarea = targetDoc.querySelector('textarea[data-testid="stChatInputTextArea"]');
+    if (!textarea) {
+      showToast('⚠️ Input not found', 3000);
+      return;
+    }
+
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+      window.parent.HTMLTextAreaElement.prototype, 'value'
+    ).set;
+    nativeInputValueSetter.call(textarea, transcript);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.focus();
+
+    showToast('✅ Ready to send', 2000);
+  };
+
+})();
+</script>
+"""
+
+components.html(VOICE_COMPONENT_HTML, height=0, scrolling=False)
+
+# ─────────────────────────────────────────────────────────────────
 #  CHAT HISTORY
 # ─────────────────────────────────────────────────────────────────
 for msg in st.session_state.messages:
@@ -962,17 +1474,12 @@ for msg in st.session_state.messages:
                     msg.get("chart_y", ""),
                     chart_color=msg.get("chart_color"),
                     chart_title=msg.get("chart_title", ""),
+                    title_color=msg.get("title_color"),
                 )
 
 # ─────────────────────────────────────────────────────────────────
-#  CHAT PROCESSING — two-phase pattern from second code
-#  Phase A: append user msg + set _pending_prompt → rerun
-#            (history loop above renders the user bubble)
-#  Phase B: on next run, _pending_prompt exists → run AI +
-#            append assistant msg → rerun so history loop renders it
+#  CHAT PROCESSING
 # ─────────────────────────────────────────────────────────────────
-
-# ── Phase B: pending prompt is ready, run AI now ──
 if "_pending_prompt" in st.session_state:
     pending = st.session_state.pop("_pending_prompt")
 
@@ -986,8 +1493,9 @@ if "_pending_prompt" in st.session_state:
         chart_x     = result.get("chart_x", "")
         chart_y     = result.get("chart_y", "")
         chart_color = result.get("chart_color")
+        title_color = result.get("title_color")
         chart_title = result.get("chart_title", "")
-        reuse_df    = result.get("_reuse_df")   # set by appearance-only short-circuit
+        reuse_df    = result.get("_reuse_df")
 
         st.markdown(summary)
 
@@ -1001,7 +1509,6 @@ if "_pending_prompt" in st.session_state:
                     unsafe_allow_html=True,
                 )
 
-            # ── If appearance-only, reuse last df without re-running SQL ──
             if reuse_df is not None:
                 df = pd.DataFrame(reuse_df)
             else:
@@ -1024,9 +1531,9 @@ if "_pending_prompt" in st.session_state:
                         resolved_y = resolve_chart_col(chart_y, list(df.columns))
                         render_chart(df, chart, resolved_x, resolved_y,
                                      chart_color=chart_color,
-                                     chart_title=chart_title)
+                                     chart_title=chart_title,
+                                     title_color=title_color)
 
-        # Store resolved column names so history replay also works
         resolved_x_store = resolve_chart_col(chart_x, list(df.columns)) if df is not None and not df.empty else chart_x
         resolved_y_store = resolve_chart_col(chart_y, list(df.columns)) if df is not None and not df.empty else chart_y
 
@@ -1040,12 +1547,12 @@ if "_pending_prompt" in st.session_state:
             "chart_x":     resolved_x_store,
             "chart_y":     resolved_y_store,
             "chart_color": chart_color,
+            "title_color": title_color,
             "chart_title": chart_title,
         })
 
 # ─────────────────────────────────────────────────────────────────
 #  CHAT INPUT
-#  Phase A: capture prompt → append user msg → store pending → rerun
 # ─────────────────────────────────────────────────────────────────
 _new_prompt = None
 
