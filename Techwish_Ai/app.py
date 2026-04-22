@@ -57,7 +57,7 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────
-#  CSS — Poppins font
+#  CSS — Poppins font + sidebar alignment fix
 # ─────────────────────────────────────────────────────────────────
 st.markdown("""
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -71,21 +71,40 @@ html, body, [class*="css"], .stApp, .stMarkdown, .stTextInput,
     font-family: 'Poppins', sans-serif !important;
 }
 
-.topbar {
+/* ── Strip Streamlit's default main-content padding so we control it ── */
+[data-testid="stAppViewBlockContainer"],
+[data-testid="stMainBlockContainer"] {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    padding-top: 0 !important;
+}
+
+/* ── Top bar wrapper ── */
+.topbar-wrap {
+    width: 100%;
+    border-bottom: 1px solid rgba(128,128,128,0.25);
+    padding: 1rem 2rem 1rem 2rem;
+    margin-bottom: 1.5rem;
+    box-sizing: border-box;
+}
+
+.topbar-inner {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 1rem 2rem;
-    background: transparent;
-    border-bottom: 1px solid rgba(128,128,128,0.2);
-    margin-bottom: 1.5rem;
+    gap: 15px;
 }
-.topbar h1 {
+
+.topbar-inner h1 {
     font-family: 'Poppins', sans-serif !important;
     font-weight: 800;
     font-size: 1.6rem;
     margin: 0;
     color: #1565C0;
+}
+
+/* Re-add padding for content below the topbar */
+.main-content {
+    padding: 0 2rem;
 }
 
 .result-card {
@@ -124,14 +143,19 @@ html, body, [class*="css"], .stApp, .stMarkdown, .stTextInput,
     line-height: 1.4;
     vertical-align: middle;
 }
+
+/* Restore padding for all streamlit elements after topbar */
+section[data-testid="stMain"] > div:first-child > div > div > div > div:not(:first-child) {
+    padding-left: 2rem !important;
+    padding-right: 2rem !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────
-#  DATABASE CONNECTION  — Snowflake
+#  DATABASE CONNECTION — no caching to avoid token expiry
 # ─────────────────────────────────────────────────────────────────
-@st.cache_resource
-def get_snowflake_conn(database: str = None):
+def _create_snowflake_conn(database: str = None):
     connect_kwargs = dict(
         account=SNOWFLAKE_ACCOUNT,
         user=SNOWFLAKE_USER,
@@ -144,10 +168,33 @@ def get_snowflake_conn(database: str = None):
         connect_kwargs["role"] = SNOWFLAKE_ROLE
     return snowflake.connector.connect(**connect_kwargs)
 
-@st.cache_data(show_spinner=False)
+# Alias so nothing else breaks
+def get_snowflake_conn(database: str = None):
+    return _create_snowflake_conn(database)
+
+def run_query(sql: str, database: str) -> pd.DataFrame:
+    """Run query with automatic reconnect on token expiry (08001 / 390114)."""
+    def _execute(conn):
+        cur = conn.cursor()
+        cur.execute(f'USE DATABASE "{database}"')
+        cur.execute(sql)
+        cols = [desc[0] for desc in cur.description]
+        rows = cur.fetchall()
+        return pd.DataFrame(rows, columns=cols)
+
+    try:
+        conn = _create_snowflake_conn(database)
+        return _execute(conn)
+    except Exception as e:
+        err = str(e)
+        if "08001" in err or "390114" in err or "Authentication token" in err:
+            conn = _create_snowflake_conn(database)
+            return _execute(conn)
+        raise
+
 def list_databases() -> list[str]:
     try:
-        conn = get_snowflake_conn()
+        conn = _create_snowflake_conn()
         cur = conn.cursor()
         cur.execute("SHOW DATABASES")
         rows = cur.fetchall()
@@ -157,15 +204,6 @@ def list_databases() -> list[str]:
     except Exception as e:
         st.error(f"Could not list databases: {e}")
         return []
-
-def run_query(sql: str, database: str) -> pd.DataFrame:
-    conn = get_snowflake_conn(database)
-    cur = conn.cursor()
-    cur.execute(f'USE DATABASE "{database}"')
-    cur.execute(sql)
-    cols = [desc[0] for desc in cur.description]
-    rows = cur.fetchall()
-    return pd.DataFrame(rows, columns=cols)
 
 # ─────────────────────────────────────────────────────────────────
 #  SCHEMA LOADER
@@ -194,7 +232,7 @@ def load_schema(database: str) -> str:
         return f"Schema load failed: {e}"
 
 # ─────────────────────────────────────────────────────────────────
-#  WHITELIST BUILDER (with full schema info)
+#  WHITELIST BUILDER
 # ─────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def build_whitelist(database: str) -> dict[str, list[str]]:
@@ -216,7 +254,6 @@ def build_whitelist(database: str) -> dict[str, list[str]]:
 
 @st.cache_data(show_spinner=False)
 def build_full_schema_dict(database: str) -> dict:
-    """Build a comprehensive schema dictionary with exact column info"""
     schema_sql = f"""
         SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE
         FROM {database}.INFORMATION_SCHEMA.COLUMNS
@@ -230,7 +267,6 @@ def build_full_schema_dict(database: str) -> dict:
             tbl = row["TABLE_NAME"].upper()
             col = row["COLUMN_NAME"].upper()
             dtype = row["DATA_TYPE"]
-            
             if tbl not in schema_dict:
                 schema_dict[tbl] = {}
             schema_dict[tbl][col] = dtype
@@ -307,7 +343,7 @@ def validate_sql_against_whitelist(sql: str, wl: dict[str, list[str]]) -> tuple[
     return (len(bad) == 0), bad
 
 # ─────────────────────────────────────────────────────────────────
-#  COLOR EXTRACTION  — with target detection (chart vs title)
+#  COLOR EXTRACTION
 # ─────────────────────────────────────────────────────────────────
 COLOR_NAME_MAP = {
     "red": "#E53935", "green": "#43A047", "blue": "#1565C0",
@@ -323,7 +359,6 @@ COLOR_NAME_MAP = {
 }
 
 def extract_color_from_question(question: str) -> str | None:
-    """Extract any color from the question."""
     q = question.lower()
     hex_match = _re.search(r'#?([0-9a-fA-F]{6})\b', question)
     if hex_match:
@@ -334,18 +369,10 @@ def extract_color_from_question(question: str) -> str | None:
     return None
 
 def detect_color_change_target(question: str) -> str:
-    """
-    Returns:
-      'title'  — user explicitly wants to change ONLY the title color
-      'chart'  — user explicitly wants to change ONLY the chart/bar color
-      'both'   — generic color change (applies to both)
-      'none'   — no color change requested
-    """
     q = question.lower()
     has_color = bool(extract_color_from_question(question))
     if not has_color:
         return "none"
-
     title_pattern = bool(_re.search(
         r'\btitle\s+(color|colour)\b'
         r'|\b(color|colour)\s+(of\s+)?(the\s+)?title\b'
@@ -360,12 +387,10 @@ def detect_color_change_target(question: str) -> str:
         r'|\b(color|colour)\b.{0,20}\b(chart|bar|bars|line|graph|series)\b',
         q
     ))
-
     if title_pattern and not chart_pattern:
         return "title"
     if chart_pattern and not title_pattern:
         return "chart"
-    # Generic: "change color to red" / "make it blue" — both
     return "both"
 
 # ─────────────────────────────────────────────────────────────────
@@ -494,61 +519,46 @@ def img_to_b64(filename: str) -> str:
 #  ADVANCED COLUMN RESOLUTION
 # ─────────────────────────────────────────────────────────────────
 def find_date_columns(schema_dict: dict, table_name: str) -> list[str]:
-    """Find date/timestamp columns in a table"""
     if table_name.upper() not in schema_dict:
         return []
-    
     tbl = schema_dict[table_name.upper()]
     date_keywords = ['date', 'time', 'timestamp', 'datetime', 'created', 'updated', 'at']
     date_cols = []
-    
     for col_name, dtype in tbl.items():
         col_lower = col_name.lower()
         dtype_lower = dtype.lower()
-        
-        # Check data type
         if any(k in dtype_lower for k in ['date', 'timestamp', 'time']):
             date_cols.append(col_name)
-        # Check column name
         elif any(col_lower.startswith(k) or col_lower.endswith(k) for k in date_keywords):
             date_cols.append(col_name)
-    
     return date_cols
 
 def find_numeric_columns(schema_dict: dict, table_name: str) -> list[str]:
-    """Find numeric columns suitable for aggregation"""
     if table_name.upper() not in schema_dict:
         return []
-    
     tbl = schema_dict[table_name.upper()]
     numeric_types = ['int', 'float', 'decimal', 'numeric', 'bigint', 'smallint', 'double', 'number']
     numeric_cols = []
-    
     for col_name, dtype in tbl.items():
         dtype_lower = dtype.lower()
         if any(nt in dtype_lower for nt in numeric_types):
             numeric_cols.append(col_name)
-    
     return numeric_cols
 
 def find_text_columns(schema_dict: dict, table_name: str) -> list[str]:
-    """Find text columns suitable for grouping"""
     if table_name.upper() not in schema_dict:
         return []
-    
     tbl = schema_dict[table_name.upper()]
     text_types = ['varchar', 'char', 'text', 'string']
     text_cols = []
-    
     for col_name, dtype in tbl.items():
         dtype_lower = dtype.lower()
         if any(tt in dtype_lower for tt in text_types):
             text_cols.append(col_name)
-    
     return text_cols
 
 # ─────────────────────────────────────────────────────────────────
-#  NL → SQL  (Snowflake SQL dialect) - ENHANCED VERSION
+#  NL → SQL  (Snowflake SQL dialect)
 # ─────────────────────────────────────────────────────────────────
 def nl_to_sql(question: str, history: list, database: str) -> dict:
     wl = build_whitelist(database)
@@ -558,7 +568,7 @@ def nl_to_sql(question: str, history: list, database: str) -> dict:
         f"  {tbl}: {', '.join(cols)}"
         for tbl, cols in wl.items()
     )
-    
+
     last_sql          = ""
     last_chart        = "none"
     last_chart_x      = ""
@@ -689,17 +699,6 @@ TIME SERIES BEST PRACTICES:
 - For "daily trend": SELECT DATE(date_col) AS day, COUNT(*) ... GROUP BY 1 ORDER BY 1 DESC
 - Always alias date expressions: DATE_TRUNC('month', date_col) AS month_bucket
 
-EXAMPLES:
-- "Revenue last 7 days": 
-  SELECT DATE(date_col) AS day, SUM(amount) AS revenue 
-  FROM table WHERE date_col >= DATEADD('day', -7, CURRENT_DATE)
-  GROUP BY 1 ORDER BY 1 DESC
-
-- "Monthly trend this year":
-  SELECT DATE_TRUNC('month', date_col) AS month, COUNT(*) AS cnt
-  FROM table WHERE date_col >= DATE_TRUNC('year', CURRENT_DATE)
-  GROUP BY 1 ORDER BY 1
-
 ════════════════════════════════════════════════════════
 SNOWFLAKE SQL RULES
 ════════════════════════════════════════════════════════
@@ -721,13 +720,6 @@ Last SQL: {last_sql if last_sql else "(none — first query)"}
 
 If new question modifies last query → edit ONLY that query
 If new topic → write fresh query
-
-════════════════════════════════════════════════════════
-CHART TITLE EXTRACTION
-════════════════════════════════════════════════════════
-- If user mentions explicit title → use that exact title
-- Otherwise → generate SHORT descriptive title (5-8 words max)
-- Always populate "chart_title" field
 
 ════════════════════════════════════════════════════════
 OUTPUT — RAW JSON ONLY. NO MARKDOWN. NO CODE FENCES.
@@ -903,7 +895,7 @@ def resolve_chart_col(col: str, df_columns: list) -> str:
     return col
 
 # ─────────────────────────────────────────────────────────────────
-#  CHART RENDERER  — Plotly + Seaborn + Matplotlib
+#  CHART RENDERER
 # ─────────────────────────────────────────────────────────────────
 def _effective_title_color(chart_color: str | None, title_color: str | None) -> str:
     if title_color:
@@ -922,8 +914,8 @@ def render_chart(
     if chart_type == "none" or not x:
         return
 
-    single_color   = chart_color if chart_color else DEFAULT_CHART_COLOR
-    seq_colors     = [chart_color] + DEFAULT_BLUE_SEQUENCE if chart_color else DEFAULT_BLUE_SEQUENCE
+    single_color    = chart_color if chart_color else DEFAULT_CHART_COLOR
+    seq_colors      = [chart_color] + DEFAULT_BLUE_SEQUENCE if chart_color else DEFAULT_BLUE_SEQUENCE
     eff_title_color = _effective_title_color(chart_color, title_color)
 
     if chart_type.startswith("seaborn_"):
@@ -987,15 +979,7 @@ def render_chart(
         st.warning(f"Could not render {chart_type} chart: {e}")
 
 
-def _render_seaborn(
-    df: pd.DataFrame,
-    chart_type: str,
-    x: str,
-    y: str,
-    color: str,
-    title: str,
-    title_color: str,
-):
+def _render_seaborn(df, chart_type, x, y, color, title, title_color):
     try:
         sns.set_theme(style="darkgrid")
         fig, ax = plt.subplots(figsize=(10, 5))
@@ -1007,10 +991,8 @@ def _render_seaborn(
                 sns.barplot(data=df, x=x, y=y, color=color, ax=ax)
             else:
                 sns.countplot(data=df, x=x, color=color, ax=ax)
-
         elif chart_type == "seaborn_line":
             sns.lineplot(data=df, x=x, y=y, color=color, marker="o", ax=ax)
-
         elif chart_type == "seaborn_heatmap":
             numeric_df = df.select_dtypes(include="number")
             if numeric_df.shape[1] >= 2:
@@ -1019,19 +1001,16 @@ def _render_seaborn(
                             linewidths=0.5, linecolor="rgba(200,200,200,0.2)")
             else:
                 sns.barplot(data=df, x=x, y=y, color=color, ax=ax)
-
         elif chart_type == "seaborn_violin":
             if y in df.columns:
                 sns.violinplot(data=df, x=x, y=y, color=color, ax=ax)
             else:
                 sns.violinplot(data=df, y=x, color=color, ax=ax)
-
         elif chart_type == "seaborn_box":
             if y in df.columns:
                 sns.boxplot(data=df, x=x, y=y, color=color, ax=ax)
             else:
                 sns.boxplot(data=df, y=x, color=color, ax=ax)
-
         else:
             sns.barplot(data=df, x=x, y=y, color=color, ax=ax)
 
@@ -1054,16 +1033,7 @@ def _render_seaborn(
         st.warning(f"Could not render seaborn chart: {e}")
 
 
-def _render_matplotlib(
-    df: pd.DataFrame,
-    chart_type: str,
-    x: str,
-    y: str,
-    color: str,
-    seq_colors: list,
-    title: str,
-    title_color: str,
-):
+def _render_matplotlib(df, chart_type, x, y, color, seq_colors, title, title_color):
     try:
         fig, ax = plt.subplots(figsize=(10, 5))
         fig.patch.set_alpha(0.0)
@@ -1072,12 +1042,11 @@ def _render_matplotlib(
         if chart_type == "matplotlib_bar":
             x_vals = df[x].astype(str).tolist()
             y_vals = df[y].tolist() if y in df.columns else [0] * len(x_vals)
-            bars = ax.bar(x_vals, y_vals, color=color, width=0.6, edgecolor="none")
+            ax.bar(x_vals, y_vals, color=color, width=0.6, edgecolor="none")
             ax.set_xlabel(x, color="gray", fontsize=9)
             ax.set_ylabel(y if y else "", color="gray", fontsize=9)
             plt.xticks(rotation=30, ha="right", fontsize=8, color="gray")
             plt.yticks(fontsize=8, color="gray")
-
         elif chart_type == "matplotlib_line":
             x_vals = df[x].astype(str).tolist()
             y_vals = df[y].tolist() if y in df.columns else [0] * len(x_vals)
@@ -1086,7 +1055,6 @@ def _render_matplotlib(
             ax.set_ylabel(y if y else "", color="gray", fontsize=9)
             plt.xticks(rotation=30, ha="right", fontsize=8, color="gray")
             plt.yticks(fontsize=8, color="gray")
-
         elif chart_type == "matplotlib_pie":
             labels = df[x].astype(str).tolist()
             vals   = df[y].tolist() if y in df.columns else [1] * len(labels)
@@ -1095,7 +1063,6 @@ def _render_matplotlib(
                    autopct="%1.1f%%", startangle=140,
                    textprops={"color": "gray", "fontsize": 8})
             ax.axis("equal")
-
         elif chart_type == "matplotlib_hist":
             vals = df[x].dropna().tolist()
             ax.hist(vals, color=color, edgecolor="none", bins=20)
@@ -1103,7 +1070,6 @@ def _render_matplotlib(
             ax.set_ylabel("Frequency", color="gray", fontsize=9)
             plt.xticks(fontsize=8, color="gray")
             plt.yticks(fontsize=8, color="gray")
-
         else:
             x_vals = df[x].astype(str).tolist()
             y_vals = df[y].tolist() if y in df.columns else [0] * len(x_vals)
@@ -1158,8 +1124,7 @@ with st.sidebar:
 
     light_src = img_to_b64(LOGO_LIGHT_FILE)
     dark_src  = img_to_b64(LOGO_DARK_FILE)
-
-    logo_src = (dark_src or light_src) if _is_dark else (light_src or dark_src)
+    logo_src  = (dark_src or light_src) if _is_dark else (light_src or dark_src)
 
     if logo_src:
         st.markdown(
@@ -1233,8 +1198,13 @@ with st.sidebar:
         )
 
 # ─────────────────────────────────────────────────────────────────
-#  TOP BAR
+#  TOP BAR — uses a JS snippet to measure sidebar width and
+#  stretch the divider line flush to the sidebar border
 # ─────────────────────────────────────────────────────────────────
+if not selected_db:
+    st.info("Please select a database from the sidebar to get started.")
+    st.stop()
+
 connected_badge = (
     f'<span style="display:inline-flex; align-items:center; gap:5px; '
     f'font-size:0.75rem; font-family:Poppins,sans-serif; color:#2E7D32; font-weight:500;">'
@@ -1242,22 +1212,49 @@ connected_badge = (
     f'background:#2E7D32;"></span>Connected</span>'
 ) if selected_db else ''
 
+# Inject JS that reads the actual main-block left offset and applies it
+components.html("""
+<script>
+(function() {
+  function alignDivider() {
+    const mainBlock = window.parent.document.querySelector('[data-testid="stAppViewBlockContainer"]');
+    const divider   = window.parent.document.getElementById('tw-top-divider');
+    if (!mainBlock || !divider) return;
+    const rect      = mainBlock.getBoundingClientRect();
+    const leftPx    = rect.left;
+    divider.style.marginLeft  = `-${leftPx}px`;
+    divider.style.width       = `calc(100% + ${leftPx}px)`;
+  }
+  // Run once after paint, then on resize
+  setTimeout(alignDivider, 200);
+  window.addEventListener('resize', alignDivider);
+})();
+</script>
+""", height=56, scrolling=False)
+
 st.markdown(f"""
-<div class="topbar">
-    <div style="display:flex; align-items:center; gap:15px;">
-        <h1>📊 {selected_db or "Analytics"}</h1>
+<div style="padding: 1rem 0 0 0;">
+    <div style="display:flex; align-items:center; gap:15px; margin-bottom:0.6rem;">
+        <h1 style="font-family:Poppins,sans-serif; font-weight:800; font-size:1.6rem;
+                   margin:0; color:#1565C0;">📊 {selected_db or "Analytics"}</h1>
         {connected_badge}
-        <span style="color:gray; font-size:0.9rem; font-family:Poppins,sans-serif;">| Powered by Techwish AI</span>
+        <span style="color:gray; font-size:0.9rem; font-family:Poppins,sans-serif;">
+            | Powered by Techwish AI
+        </span>
     </div>
 </div>
+<hr id="tw-top-divider" style="
+    border: none;
+    height: 1px;
+    background: rgba(128,128,128,0.25);
+    margin: 0 0 1.5rem 0;
+    display: block;
+    position: relative;
+"/>
 """, unsafe_allow_html=True)
 
-if not selected_db:
-    st.info("Please select a database from the sidebar to get started.")
-    st.stop()
-
 # ─────────────────────────────────────────────────────────────────
-#  VOICE ASSISTANT — MIC BUTTON NEXT TO CHAT INPUT BOX
+#  VOICE ASSISTANT
 # ─────────────────────────────────────────────────────────────────
 VOICE_COMPONENT_HTML = """
 <script>
@@ -1266,7 +1263,6 @@ VOICE_COMPONENT_HTML = """
 
   if (targetDoc.getElementById('tw-mic-btn')) return;
 
-  // ── Styles ──
   const style = targetDoc.createElement('style');
   style.textContent = `
     #tw-mic-btn {
@@ -1289,25 +1285,14 @@ VOICE_COMPONENT_HTML = """
       z-index: 99999;
       flex-shrink: 0;
     }
-    #tw-mic-btn:hover {
-      color: #ffffff;
-      background: rgba(255,255,255,0.1);
-    }
-    #tw-mic-btn.active {
-      color: #E53935;
-      animation: tw-pulse 1s infinite;
-    }
-    #tw-mic-btn svg {
-      width: 20px;
-      height: 20px;
-    }
-
+    #tw-mic-btn:hover { color: #ffffff; background: rgba(255,255,255,0.1); }
+    #tw-mic-btn.active { color: #E53935; animation: tw-pulse 1s infinite; }
+    #tw-mic-btn svg { width: 20px; height: 20px; }
     @keyframes tw-pulse {
       0%   { opacity: 1; }
       50%  { opacity: 0.4; }
       100% { opacity: 1; }
     }
-
     #tw-voice-toast {
       position: fixed;
       bottom: 60px;
@@ -1328,31 +1313,19 @@ VOICE_COMPONENT_HTML = """
   `;
   targetDoc.head.appendChild(style);
 
-  // ── Mic SVG ──
-  const MIC_ICON = `
-    <svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-      <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v6a2 2 0 1 0 4 0V5a2 2 0 0 0-2-2z"/>
-      <path d="M19 11a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 0 0-2 0 7 7 0 0 0 6 6.93V20H9a1 1 0 0 0 0 2h6a1 1 0 0 0 0-2h-2v-2.07A7 7 0 0 0 19 11z"/>
-    </svg>`;
+  const MIC_ICON = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v6a2 2 0 1 0 4 0V5a2 2 0 0 0-2-2z"/><path d="M19 11a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 0 0-2 0 7 7 0 0 0 6 6.93V20H9a1 1 0 0 0 0 2h6a1 1 0 0 0 0-2h-2v-2.07A7 7 0 0 0 19 11z"/></svg>`;
+  const STOP_ICON = `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>`;
 
-  const STOP_ICON = `
-    <svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-      <rect x="6" y="6" width="12" height="12" rx="2"/>
-    </svg>`;
-
-  // ── Button ──
   const btn = targetDoc.createElement('button');
   btn.id = 'tw-mic-btn';
   btn.title = 'Click to speak your question';
   btn.innerHTML = MIC_ICON;
   targetDoc.body.appendChild(btn);
 
-  // ── Toast ──
   const toast = targetDoc.createElement('div');
   toast.id = 'tw-voice-toast';
   targetDoc.body.appendChild(toast);
 
-  // ── Browser support ──
   const SpeechRecognition =
     window.parent.SpeechRecognition || window.parent.webkitSpeechRecognition ||
     window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1366,10 +1339,10 @@ VOICE_COMPONENT_HTML = """
   }
 
   const recognition = new SpeechRecognition();
-  recognition.lang            = 'en-US';
-  recognition.interimResults  = false;
+  recognition.lang = 'en-US';
+  recognition.interimResults = false;
   recognition.maxAlternatives = 1;
-  recognition.continuous      = false;
+  recognition.continuous = false;
 
   let isListening = false;
 
@@ -1389,14 +1362,9 @@ VOICE_COMPONENT_HTML = """
     showToast('🎙️ Listening…', 60000);
   }
 
-  function stopListening() {
-    recognition.stop();
-  }
+  function stopListening() { recognition.stop(); }
 
-  btn.addEventListener('click', () => {
-    if (isListening) stopListening();
-    else startListening();
-  });
+  btn.addEventListener('click', () => { if (isListening) stopListening(); else startListening(); });
 
   recognition.onend = () => {
     isListening = false;
@@ -1410,40 +1378,26 @@ VOICE_COMPONENT_HTML = """
     isListening = false;
     btn.classList.remove('active');
     btn.innerHTML = MIC_ICON;
-    const msgs = {
-      'not-allowed':   '🚫 Permission denied',
-      'no-speech':     '🔇 No speech detected',
-      'audio-capture': '🎙️ No microphone',
-      'network':       '🌐 Network error',
-    };
+    const msgs = { 'not-allowed':'🚫 Permission denied','no-speech':'🔇 No speech detected','audio-capture':'🎙️ No microphone','network':'🌐 Network error' };
     showToast(msgs[e.error] || `⚠️ ${e.error}`, 3500);
   };
 
   recognition.onresult = (e) => {
     const transcript = e.results[0][0].transcript.trim();
     if (!transcript) return;
-
     const textarea = targetDoc.querySelector('textarea[data-testid="stChatInputTextArea"]');
-    if (!textarea) {
-      showToast('⚠️ Input not found', 3000);
-      return;
-    }
-
-    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-      window.parent.HTMLTextAreaElement.prototype, 'value'
-    ).set;
+    if (!textarea) { showToast('⚠️ Input not found', 3000); return; }
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.parent.HTMLTextAreaElement.prototype, 'value').set;
     nativeInputValueSetter.call(textarea, transcript);
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     textarea.focus();
-
     showToast('✅ Ready to send', 2000);
   };
-
 })();
 </script>
 """
 
-components.html(VOICE_COMPONENT_HTML, height=0, scrolling=False)
+components.html(VOICE_COMPONENT_HTML, height=45, scrolling=False)
 
 # ─────────────────────────────────────────────────────────────────
 #  CHAT HISTORY
