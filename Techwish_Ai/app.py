@@ -1262,7 +1262,9 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    st.divider()
+   st.markdown("""
+<hr style="border: none; height: 1px; background: rgba(128,128,128,0.25); margin-top: 0px; margin-bottom: 0px;">
+""", unsafe_allow_html=True)
     st.markdown("**❄️ Select Database**")
     available_dbs = list_databases()
 
@@ -1535,7 +1537,7 @@ if (existingToast) existingToast.remove();
 })();
 </script>
 """
-components.html(VOICE_COMPONENT_HTML, height=45, scrolling=False)
+components.html(VOICE_COMPONENT_HTML, height=40, scrolling=False)
 
 # ─────────────────────────────────────────────────────────────────
 #  CHAT HISTORY
