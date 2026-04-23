@@ -479,37 +479,43 @@ def _get_currency_symbol(col_name: str) -> str | None:
 
 def format_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Round all numeric float columns to 0 decimal places.
-    Add currency prefix ($  or ₹) for currency-like columns.
+    Round all numeric columns to 0 decimal places (whole numbers only).
+    Add currency prefix ($ or ₹) for currency-like columns.
     Returns a display copy (strings); original df is unchanged.
     """
     display = df.copy()
     for col in display.columns:
-        if pd.api.types.is_float_dtype(display[col]):
-            symbol = _get_currency_symbol(col)
-            rounded = display[col].round(0).astype("Int64", errors="ignore")
-            # Int64 may fail for NaN-heavy cols — fall back to object
+        is_float   = pd.api.types.is_float_dtype(display[col])
+        is_integer = pd.api.types.is_integer_dtype(display[col])
+
+        # Also catch object columns that are actually numeric (e.g. Decimal from Snowflake)
+        if not is_float and not is_integer:
             try:
+                converted = pd.to_numeric(display[col], errors="raise")
+                display[col] = converted
+                is_float   = pd.api.types.is_float_dtype(display[col])
+                is_integer = pd.api.types.is_integer_dtype(display[col])
+            except Exception:
+                pass  # leave non-numeric columns as-is
+
+        if is_float or is_integer:
+            symbol = _get_currency_symbol(col)
+            try:
+                # Round to 0 dp and convert to int (drops trailing .0)
                 rounded = display[col].round(0).fillna(0).astype(int)
             except Exception:
-                rounded = display[col].round(0)
+                try:
+                    rounded = display[col].round(0)
+                except Exception:
+                    continue  # give up on this column
+
             if symbol:
                 display[col] = rounded.apply(
-                    lambda v: f"{symbol}{v:,}" if pd.notna(v) else ""
+                    lambda v: f"{symbol}{int(v):,}" if pd.notna(v) else ""
                 )
             else:
                 display[col] = rounded.apply(
-                    lambda v: f"{v:,}" if pd.notna(v) else ""
-                )
-        elif pd.api.types.is_integer_dtype(display[col]):
-            symbol = _get_currency_symbol(col)
-            if symbol:
-                display[col] = display[col].apply(
-                    lambda v: f"{symbol}{v:,}" if pd.notna(v) else ""
-                )
-            else:
-                display[col] = display[col].apply(
-                    lambda v: f"{v:,}" if pd.notna(v) else ""
+                    lambda v: f"{int(v):,}" if pd.notna(v) else ""
                 )
     return display
 
