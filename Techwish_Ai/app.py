@@ -459,22 +459,26 @@ def is_chart_request(text: str) -> bool:
 #  NUMBER FORMATTING — round floats to 0 dp, add currency symbol
 # ─────────────────────────────────────────────────────────────────
 # INR keywords in column name → ₹ prefix
-_INR_KEYWORDS = ["inr", "rupee", "rupees", "rs", "rs_", "_rs", "indian"]
+_INR_KEYWORDS = ["inr", "rupee", "rupees"]
 # Currency keywords → $ by default
 _CURRENCY_KEYWORDS = [
-    "amount", "revenue", "price", "salary", "cost", "fee", "total",
-    "earning", "earnings", "income", "profit", "loss", "budget",
-    "expense", "expenses", "payment", "payments", "value", "sales",
-    "turnover", "gross", "net", "usd", "dollar", "dollars",
+    "revenue", "salary", "price", "cost", "fee",
+    "earning", "earnings", "profit", "loss", "budget",
+    "expense", "expenses", "payment", "payments",
+    "usd", "dollar", "dollars", "amount_paid", "unit_price",
+    "sale_price", "list_price", "invoice_amount",
 ]
 
 def _get_currency_symbol(col_name: str) -> str | None:
-    """Return '$' or '₹' if column looks like a currency column, else None."""
+    """Return '$' or '₹' ONLY if column name is explicitly a currency field."""
     c = col_name.lower()
     if any(k in c for k in _INR_KEYWORDS):
         return "₹"
-    if any(k in c for k in _CURRENCY_KEYWORDS):
-        return "$"
+    # Must be an exact word-boundary match, not a substring of unrelated words
+    import re as _re2
+    for kw in _CURRENCY_KEYWORDS:
+        if _re2.search(rf'(^|_){_re2.escape(kw)}($|_)', c):
+            return "$"
     return None
 
 def format_dataframe(df: pd.DataFrame) -> pd.DataFrame:
