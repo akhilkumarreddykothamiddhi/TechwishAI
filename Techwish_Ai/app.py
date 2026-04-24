@@ -483,16 +483,15 @@ def _get_currency_symbol(col_name: str) -> str | None:
 
 def format_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Round all numeric columns to 0 decimal places (whole numbers only).
-    Add currency prefix ($ or ₹) for currency-like columns.
-    Returns a display copy (strings); original df is unchanged.
+    Round all numeric columns to 0 decimal places.
+    Add currency prefix ($ or ₹) WITH thousand separators for currency columns.
+    Plain numeric columns (counts, litres, quantities) get NO comma formatting.
     """
     display = df.copy()
     for col in display.columns:
         is_float   = pd.api.types.is_float_dtype(display[col])
         is_integer = pd.api.types.is_integer_dtype(display[col])
 
-        # Also catch object columns that are actually numeric (e.g. Decimal from Snowflake)
         if not is_float and not is_integer:
             try:
                 converted = pd.to_numeric(display[col], errors="raise")
@@ -500,26 +499,27 @@ def format_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                 is_float   = pd.api.types.is_float_dtype(display[col])
                 is_integer = pd.api.types.is_integer_dtype(display[col])
             except Exception:
-                pass  # leave non-numeric columns as-is
+                pass
 
         if is_float or is_integer:
             symbol = _get_currency_symbol(col)
             try:
-                # Round to 0 dp and convert to int (drops trailing .0)
                 rounded = display[col].round(0).fillna(0).astype(int)
             except Exception:
                 try:
                     rounded = display[col].round(0)
                 except Exception:
-                    continue  # give up on this column
+                    continue
 
             if symbol:
+                # Currency → add symbol + thousand separators
                 display[col] = rounded.apply(
                     lambda v: f"{symbol}{int(v):,}" if pd.notna(v) else ""
                 )
             else:
+                # Plain number (litres, count, quantity, etc.) → just round, no commas
                 display[col] = rounded.apply(
-                    lambda v: f"{int(v):,}" if pd.notna(v) else ""
+                    lambda v: f"{int(v)}" if pd.notna(v) else ""
                 )
     return display
 
