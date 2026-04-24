@@ -803,10 +803,28 @@ ABSOLUTE RULES:
 ✓ Copy names character-for-character from the numbered list above
 ✓ If no exact match exists → return sql as "" and explain
 
-════════════════════════════════════════════════════════
 TIME SERIES & DATE HANDLING — SNOWFLAKE SPECIFICS
 ════════════════════════════════════════════════════════
-DATE FUNCTIONS (case-insensitive):
+⚠️ CRITICAL — INTEGER DATE KEYS (e.g. TIMEKEY, DATE_KEY, DATEKEY):
+Many data warehouse fact tables store dates as INTEGER surrogate keys in YYYYMMDD format (e.g. 20250115).
+These are NUMBER columns — YEAR(), MONTH(), DATE_TRUNC(), EXTRACT() will ALL FAIL on them.
+
+DETECT integer date keys: column names containing 'key', 'id' with date context, or DATA_TYPE = NUMBER/INT.
+
+USE THESE PATTERNS for integer YYYYMMDD keys:
+- Year filter:   WHERE FLOOR(timekey / 10000) = 2025
+- Month filter:  WHERE FLOOR(timekey / 10000) = 2025 AND FLOOR(MOD(timekey, 10000) / 100) = 6
+- Day filter:    WHERE MOD(timekey, 100) = 15
+- Year extract:  FLOOR(timekey / 10000) AS year
+- Month extract: FLOOR(MOD(timekey, 10000) / 100) AS month
+- Day extract:   MOD(timekey, 100) AS day
+- Monthly group: FLOOR(timekey / 100) AS year_month  (gives 202501, 202502 etc.)
+- Convert to date: TO_DATE(CAST(timekey AS VARCHAR), 'YYYYMMDD')
+
+NEVER use YEAR(), MONTH(), EXTRACT(), DATE_TRUNC() on NUMBER/INT columns.
+If unsure whether a date column is DATE or INTEGER type → use FLOOR division approach as it works safely for integers, OR cast first: TO_DATE(CAST(col AS VARCHAR), 'YYYYMMDD').
+
+DATE FUNCTIONS (only for actual DATE/TIMESTAMP columns):
 - DATE_TRUNC('period', date_col): Truncates date to period (year, month, week, day, hour)
 - DATEADD('unit', num, date_col): Add/subtract time. Units: year, month, week, day, hour, minute, second
 - DATEDIFF('unit', start_date, end_date): Calculate difference between dates
@@ -815,13 +833,12 @@ DATE FUNCTIONS (case-insensitive):
 - TO_DATE(string): Convert string to date
 
 TIME SERIES BEST PRACTICES:
-- For "trends": GROUP BY DATE_TRUNC('month', date_col) or DATE_TRUNC('day', date_col)
-- For "this period": WHERE date_col >= DATE_TRUNC('month', CURRENT_DATE)
-- For "last N days": WHERE date_col >= DATEADD('day', -N, CURRENT_DATE)
-- For "year-over-year": Use WHERE YEAR(date_col) = YEAR(CURRENT_DATE) - 1
-- For "monthly breakdown": SELECT DATE_TRUNC('month', date_col) AS month, SUM(amount) ... GROUP BY 1 ORDER BY 1
-- For "daily trend": SELECT DATE(date_col) AS day, COUNT(*) ... GROUP BY 1 ORDER BY 1 DESC
-- Always alias date expressions: DATE_TRUNC('month', date_col) AS month_bucket
+- First check column DATA_TYPE — if NUMBER/INT → use FLOOR division, not date functions
+- For "trends" on integer key: GROUP BY FLOOR(timekey / 100) AS year_month ORDER BY 1
+- For "trends" on date col: GROUP BY DATE_TRUNC('month', date_col)
+- For "this year" on integer key: WHERE FLOOR(timekey / 10000) = YEAR(CURRENT_DATE)
+- For "last N days" on integer key: WHERE TO_DATE(CAST(timekey AS VARCHAR), 'YYYYMMDD') >= DATEADD('day', -N, CURRENT_DATE)
+- Always alias date expressions: FLOOR(timekey / 10000) AS year
 
 ════════════════════════════════════════════════════════
 SNOWFLAKE SQL RULES
