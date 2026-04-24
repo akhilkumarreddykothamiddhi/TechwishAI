@@ -1179,6 +1179,19 @@ def render_chart(
         return
 
     try:
+        # ── Fix: treat small-integer X columns (years, months, codes) as categories ──
+        if x in df.columns and pd.api.types.is_numeric_dtype(df[x]):
+            unique_vals = df[x].dropna().unique()
+            if len(unique_vals) <= 50 or (df[x].max() <= 9999 and df[x].min() >= 1000):
+                df = df.copy()
+                df[x] = df[x].astype(int).astype(str)
+        # ── Fix: treat small-integer X columns (years, months, codes) as categories ──
+        if x in df.columns and pd.api.types.is_numeric_dtype(df[x]):
+            unique_vals = df[x].dropna().unique()
+            if len(unique_vals) <= 50 or (df[x].max() <= 9999 and df[x].min() >= 1000):
+                df = df.copy()
+                df[x] = df[x].astype(int).astype(str)
+
         common_kwargs = dict(title=chart_title) if chart_title else {}
         if chart_type == "bar":
             fig = px.bar(df, x=x, y=y, color_discrete_sequence=[single_color], **common_kwargs)
