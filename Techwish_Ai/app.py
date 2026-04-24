@@ -226,7 +226,111 @@ def _create_snowflake_conn(database: str = None):
 
 def get_snowflake_conn(database: str = None):
     return _get_conn()
+def detect_timekey_format(database: str, table_name: str, col_name: str) -> str:
+    """
+    Detects actual format of a date key column and returns the correct WHERE clause fragment.
+    Returns: 'date', 'yyyymmdd_int', 'yyyymmdd_str', or 'unknown'
+    """
+    try:
+        sample_sql = f"""
+            SELECT {col_name}, TYPEOF({col_name}) as col_type
+            FROM {table_name}
+            WHERE {col_name} IS NOT NULL
+            LIMIT 1
+        """
+        df = run_query(sample_sql, database)
+        if df.empty:
+            return "unknown"
+        val = str(df.iloc[0][col_name]).strip()
+        col_type = str(df.iloc[0]["COL_TYPE"]).lower()
 
+        # Actual DATE/TIMESTAMP
+        if any(t in col_type for t in ["date", "timestamp", "time"]):
+            return "date"
+
+        # Integer YYYYMMDD like 20250115
+        if val.isdigit() and len(val) == 8:
+            return "yyyymmdd_int"
+
+        # String YYYYMMDD
+        if _re.match(r'^\d{8}$', val):
+            return "yyyymmdd_str"
+
+        # Integer YYYYMM like 202501
+        if val.isdigit() and len(val) == 6:
+            return "yyyymm_int"
+
+        return "unknown"
+    except Exception:
+        return "unknown"
+
+
+def fix_date_filter_in_sql(sql: str, database: str) -> str:
+    """
+    Scans SQL for date key columns, detects their actual format,
+    and rewrites year/month filters to use the correct approach.
+    """
+    # Find all table aliases used
+    table_aliases = {}
+    for match in _re.finditer(
+        r'\b(FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*)\b',
+        sql, _re.IGNORECASE
+    ):
+        table_aliases[match.group(3).upper()] = match.group(2).upper()
+
+    # Detect date key columns referenced in WHERE clause
+    date_key_pattern = _re.findall(
+        r'([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_]*(?:KEY|DATE|TIME|DT)[A-Za-z0-9_]*)',
+        sql, _re.IGNORECASE
+    )
+
+    for alias, col in date_key_pattern:
+        table_name = table_aliases.get(alias.upper(), alias.upper())
+        fmt = detect_timekey_format(database, table_name, col)
+
+        if fmt == "date":
+            # Replace FLOOR(alias.col / 10000) = YYYY with proper date filter
+            sql = _re.sub(
+                rf'FLOOR\s*\(\s*{alias}\.{col}\s*/\s*10000\s*\)\s*=\s*(\d{{4}})',
+                lambda m: f"YEAR({alias}.{col}) = {m.group(1)}",
+                sql, flags=_re.IGNORECASE
+            )
+            sql = _re.sub(
+                rf'YEAR\s*\(\s*{alias}\.{col}\s*\)\s*=\s*(\d{{4}})',
+                lambda m: f"YEAR({alias}.{col}) = {m.group(1)}",
+                sql, flags=_re.IGNORECASE
+            )
+
+        elif fmt == "yyyymmdd_int":
+            # Replace YEAR(col) with FLOOR approach
+            sql = _re.sub(
+                rf'YEAR\s*\(\s*{alias}\.{col}\s*\)\s*=\s*(\d{{4}})',
+                lambda m: f"FLOOR({alias}.{col} / 10000) = {m.group(1)}",
+                sql, flags=_re.IGNORECASE
+            )
+
+        elif fmt == "yyyymmdd_str":
+            # String YYYYMMDD — use SUBSTRING
+            sql = _re.sub(
+                rf'YEAR\s*\(\s*{alias}\.{col}\s*\)\s*=\s*(\d{{4}})',
+                lambda m: f"SUBSTRING(CAST({alias}.{col} AS VARCHAR), 1, 4) = '{m.group(1)}'",
+                sql, flags=_re.IGNORECASE
+            )
+            sql = _re.sub(
+                rf'FLOOR\s*\(\s*{alias}\.{col}\s*/\s*10000\s*\)\s*=\s*(\d{{4}})',
+                lambda m: f"SUBSTRING(CAST({alias}.{col} AS VARCHAR), 1, 4) = '{m.group(1)}'",
+                sql, flags=_re.IGNORECASE
+            )
+
+        elif fmt == "unknown":
+            # Safest fallback — cast to varchar and extract year
+            sql = _re.sub(
+                rf'(?:YEAR\s*\(|FLOOR\s*\()\s*{alias}\.{col}(?:\s*/\s*10000\s*)?\)\s*=\s*(\d{{4}})',
+                lambda m: f"LEFT(TO_VARCHAR({alias}.{col}), 4) = '{m.group(1)}'",
+                sql, flags=_re.IGNORECASE
+            )
+
+    return sql
 def run_query(sql: str, database: str) -> pd.DataFrame:
     def _execute(conn):
         cur = conn.cursor()
@@ -1655,11 +1759,12 @@ if "_pending_prompt" in st.session_state:
                     unsafe_allow_html=True,
                 )
 
-            if reuse_df is not None:
-                df = pd.DataFrame(reuse_df)
-            else:
-                with st.spinner("Running query..."):
+            with st.spinner("Running query..."):
                     try:
+                        fixed_sql = fix_date_filter_in_sql(sql, selected_db)
+                        if fixed_sql != sql:
+                            sql = fixed_sql
+                            result["sql"] = fixed_sql
                         df = run_query(sql, selected_db)
                     except Exception as e:
                         error = str(e)
