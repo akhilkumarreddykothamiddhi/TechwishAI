@@ -570,7 +570,7 @@ _CURRENCY_KEYWORDS = [
     "earning", "earnings", "profit", "loss", "budget",
     "expense", "expenses", "payment", "payments",
     "usd", "dollar", "dollars", "amount_paid", "unit_price",
-    "sale_price", "list_price", "invoice_amount",
+    "sale_price", "list_price", "invoice_amount","total_sales","Total_revenue",
 ]
 
 def _get_currency_symbol(col_name: str) -> str | None:
