@@ -1,5 +1,5 @@
 import streamlit as st
-import os, uuid, json, re as _re
+import os, json, re as _re
 import snowflake.connector
 import pandas as pd
 import plotly.express as px
@@ -36,9 +36,6 @@ GROQ_API_KEY        = cfg("GROQ_API_KEY").strip()
 GROQ_MODEL   = "llama-3.1-8b-instant"
 COMPANY_NAME = "Techwish AI — Analytics"
 
-# ─────────────────────────────────────────────────────────────────
-#  DEFAULT CHART COLOR  (Blue theme)
-# ─────────────────────────────────────────────────────────────────
 DEFAULT_CHART_COLOR   = "#1565C0"
 DEFAULT_TITLE_COLOR   = "#1565C0"
 DEFAULT_BLUE_SEQUENCE = [
@@ -56,68 +53,22 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─────────────────────────────────────────────────────────────────
-#  CSS — Poppins font + sidebar alignment fix
-# ─────────────────────────────────────────────────────────────────
 st.markdown("""
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-
 <style>
 html, body, [class*="css"], .stApp, .stMarkdown, .stTextInput,
 .stButton, .stSelectbox, .stExpander, .stChatMessage,
 .stDataFrame, .stCaption, .stSpinner, input, textarea, button {
     font-family: 'Poppins', sans-serif !important;
 }
-
-/* ── Strip default padding so header sits flush ── */
 [data-testid="stAppViewBlockContainer"],
 [data-testid="stMainBlockContainer"] {
     padding-left: 0 !important;
     padding-right: 0 !important;
     padding-top: 0 !important;
 }
-
-/* ── Top bar wrapper ── */
-.topbar-wrap {
-    width: 100%;
-    border-bottom: 1px solid rgba(128,128,128,0.25);
-    padding: 1rem 2rem 1rem 2rem;
-    margin-bottom: 1.5rem;
-    box-sizing: border-box;
-}
-
-.topbar-inner {
-    display: flex;
-    align-items: center;
-    gap: 15px;
-}
-
-.topbar-inner h1 {
-    font-family: 'Poppins', sans-serif !important;
-    font-weight: 800;
-    font-size: 1.6rem;
-    margin: 0;
-    color: #1565C0;
-}
-
-.main-content {
-    padding: 0 1rem 0 1rem;
-}
-
-.header-aligned {
-    padding: 1rem 1rem 0 1rem;
-}
-
-.result-card {
-    background: rgba(128,128,128,0.05);
-    border: 1px solid rgba(128,128,128,0.15);
-    border-radius: 12px;
-    padding: 1.2rem 1.5rem;
-    margin-bottom: 1rem;
-}
-
 .sql-block {
     background: rgba(0,0,0,0.3);
     border-radius: 8px;
@@ -127,62 +78,27 @@ html, body, [class*="css"], .stApp, .stMarkdown, .stTextInput,
     white-space: pre-wrap;
     word-break: break-all;
 }
-
-.logo-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 4px;
-}
+.logo-row { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
 .ai-badge {
-    background: #1565C0;
-    color: white;
+    background: #1565C0; color: white;
     font-family: 'Poppins', sans-serif !important;
-    font-weight: 700;
-    font-size: 0.65rem;
-    padding: 2px 7px;
-    border-radius: 20px;
-    letter-spacing: 0.05em;
-    line-height: 1.4;
-    vertical-align: middle;
+    font-weight: 700; font-size: 0.65rem;
+    padding: 2px 7px; border-radius: 20px;
+    letter-spacing: 0.05em; line-height: 1.4; vertical-align: middle;
 }
-
-/* ── Empty-state AI image ──
-   Uses left:0/right:0 so it always centres in the full viewport
-   regardless of whether the sidebar is open or collapsed.
-   top:95px gives ~5px breathing room below the divider line.     */
 .ai-welcome-img {
-    position: center;
-    top: 80px;
-    bottom: 55px;
-    left: 0;
-    right: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    pointer-events: auto;
-    z-index: 0;
-    overflow: hidden;
-    flex-shrink: 0;
+    position: center; top:80px; bottom:55px; left:0; right:0;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    pointer-events:auto; z-index:0; overflow:hidden; flex-shrink:0;
 }
 .ai-welcome-img img {
-    width:     clamp(200px, 30vw, 210px);
-    height:    auto;
-    max-width:  auto;
-    max-height: auto;
-    object-fit: auto;
-    display: auto;
-    flex-shrink: 0;
+    width: clamp(200px,30vw,210px); height:auto;
+    object-fit:contain; flex-shrink:0;
 }
 .ai-welcome-caption {
-    margin-top: 0.6rem;
-    font-family: 'Poppins', sans-serif;
-    font-size: clamp(0.7rem, 1.1vw, 0.9rem);
-    color: gray;
-    text-align: center;
-    pointer-events: auto;
-    flex-shrink: 0;
+    margin-top:0.6rem; font-family:'Poppins',sans-serif;
+    font-size:clamp(0.7rem,1.1vw,0.9rem); color:gray;
+    text-align:center; flex-shrink:0;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -209,7 +125,7 @@ def _build_conn_kwargs(database: str = None) -> dict:
 def _new_conn(database: str = None):
     return snowflake.connector.connect(**_build_conn_kwargs(database))
 
-def _get_conn() -> "snowflake.connector.connection.SnowflakeConnection":
+def _get_conn():
     conn = st.session_state.get("_sf_conn")
     if conn is not None:
         try:
@@ -221,116 +137,9 @@ def _get_conn() -> "snowflake.connector.connection.SnowflakeConnection":
     st.session_state["_sf_conn"] = conn
     return conn
 
-def _create_snowflake_conn(database: str = None):
-    return _get_conn()
-
 def get_snowflake_conn(database: str = None):
     return _get_conn()
-def detect_timekey_format(database: str, table_name: str, col_name: str) -> str:
-    """
-    Detects actual format of a date key column and returns the correct WHERE clause fragment.
-    Returns: 'date', 'yyyymmdd_int', 'yyyymmdd_str', or 'unknown'
-    """
-    try:
-        sample_sql = f"""
-            SELECT {col_name}, TYPEOF({col_name}) as col_type
-            FROM {table_name}
-            WHERE {col_name} IS NOT NULL
-            LIMIT 1
-        """
-        df = run_query(sample_sql, database)
-        if df.empty:
-            return "unknown"
-        val = str(df.iloc[0][col_name]).strip()
-        col_type = str(df.iloc[0]["COL_TYPE"]).lower()
 
-        # Actual DATE/TIMESTAMP
-        if any(t in col_type for t in ["date", "timestamp", "time"]):
-            return "date"
-
-        # Integer YYYYMMDD like 20250115
-        if val.isdigit() and len(val) == 8:
-            return "yyyymmdd_int"
-
-        # String YYYYMMDD
-        if _re.match(r'^\d{8}$', val):
-            return "yyyymmdd_str"
-
-        # Integer YYYYMM like 202501
-        if val.isdigit() and len(val) == 6:
-            return "yyyymm_int"
-
-        return "unknown"
-    except Exception:
-        return "unknown"
-
-
-def fix_date_filter_in_sql(sql: str, database: str) -> str:
-    """
-    Scans SQL for date key columns, detects their actual format,
-    and rewrites year/month filters to use the correct approach.
-    """
-    # Find all table aliases used
-    table_aliases = {}
-    for match in _re.finditer(
-        r'\b(FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*)\b',
-        sql, _re.IGNORECASE
-    ):
-        table_aliases[match.group(3).upper()] = match.group(2).upper()
-
-    # Detect date key columns referenced in WHERE clause
-    date_key_pattern = _re.findall(
-        r'([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_]*(?:KEY|DATE|TIME|DT)[A-Za-z0-9_]*)',
-        sql, _re.IGNORECASE
-    )
-
-    for alias, col in date_key_pattern:
-        table_name = table_aliases.get(alias.upper(), alias.upper())
-        fmt = detect_timekey_format(database, table_name, col)
-
-        if fmt == "date":
-            # Replace FLOOR(alias.col / 10000) = YYYY with proper date filter
-            sql = _re.sub(
-                rf'FLOOR\s*\(\s*{alias}\.{col}\s*/\s*10000\s*\)\s*=\s*(\d{{4}})',
-                lambda m: f"YEAR({alias}.{col}) = {m.group(1)}",
-                sql, flags=_re.IGNORECASE
-            )
-            sql = _re.sub(
-                rf'YEAR\s*\(\s*{alias}\.{col}\s*\)\s*=\s*(\d{{4}})',
-                lambda m: f"YEAR({alias}.{col}) = {m.group(1)}",
-                sql, flags=_re.IGNORECASE
-            )
-
-        elif fmt == "yyyymmdd_int":
-            # Replace YEAR(col) with FLOOR approach
-            sql = _re.sub(
-                rf'YEAR\s*\(\s*{alias}\.{col}\s*\)\s*=\s*(\d{{4}})',
-                lambda m: f"FLOOR({alias}.{col} / 10000) = {m.group(1)}",
-                sql, flags=_re.IGNORECASE
-            )
-
-        elif fmt == "yyyymmdd_str":
-            # String YYYYMMDD — use SUBSTRING
-            sql = _re.sub(
-                rf'YEAR\s*\(\s*{alias}\.{col}\s*\)\s*=\s*(\d{{4}})',
-                lambda m: f"SUBSTRING(CAST({alias}.{col} AS VARCHAR), 1, 4) = '{m.group(1)}'",
-                sql, flags=_re.IGNORECASE
-            )
-            sql = _re.sub(
-                rf'FLOOR\s*\(\s*{alias}\.{col}\s*/\s*10000\s*\)\s*=\s*(\d{{4}})',
-                lambda m: f"SUBSTRING(CAST({alias}.{col} AS VARCHAR), 1, 4) = '{m.group(1)}'",
-                sql, flags=_re.IGNORECASE
-            )
-
-        elif fmt == "unknown":
-            # Safest fallback — cast to varchar and extract year
-            sql = _re.sub(
-                rf'(?:YEAR\s*\(|FLOOR\s*\()\s*{alias}\.{col}(?:\s*/\s*10000\s*)?\)\s*=\s*(\d{{4}})',
-                lambda m: f"LEFT(TO_VARCHAR({alias}.{col}), 4) = '{m.group(1)}'",
-                sql, flags=_re.IGNORECASE
-            )
-
-    return sql
 def run_query(sql: str, database: str) -> pd.DataFrame:
     def _execute(conn):
         cur = conn.cursor()
@@ -339,20 +148,18 @@ def run_query(sql: str, database: str) -> pd.DataFrame:
         cols = [desc[0] for desc in cur.description]
         rows = cur.fetchall()
         return pd.DataFrame(rows, columns=cols)
-
     conn = _get_conn()
     try:
         return _execute(conn)
     except Exception as e:
         err = str(e)
-        if any(x in err for x in ("08001", "390114", "Authentication token",
-                                   "Connection", "connection", "session")):
+        if any(x in err for x in ("08001","390114","Authentication token","Connection","connection","session")):
             conn = _new_conn()
             st.session_state["_sf_conn"] = conn
             return _execute(conn)
         raise
 
-def list_databases() -> list[str]:
+def list_databases() -> list:
     try:
         conn = _get_conn()
         cur = conn.cursor()
@@ -366,7 +173,7 @@ def list_databases() -> list[str]:
         return []
 
 # ─────────────────────────────────────────────────────────────────
-#  SCHEMA LOADER
+#  SCHEMA LOADER & WHITELIST
 # ─────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_schema(database: str) -> str:
@@ -391,29 +198,27 @@ def load_schema(database: str) -> str:
     except Exception as e:
         return f"Schema load failed: {e}"
 
-# ─────────────────────────────────────────────────────────────────
-#  WHITELIST BUILDER
-# ─────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
-def build_whitelist(database: str) -> dict[str, list[str]]:
+def build_whitelist(database: str) -> dict:
     schema_sql = f"""
-        SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME
+        SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE
         FROM {database}.INFORMATION_SCHEMA.COLUMNS
         WHERE TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA')
         ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION
     """
     try:
         df = run_query(schema_sql, database)
-        wl: dict[str, list[str]] = {}
+        wl = {}
         for _, row in df.iterrows():
             tbl = row["TABLE_NAME"]
             wl.setdefault(tbl, []).append(row["COLUMN_NAME"])
         return wl
-    except Exception as e:
+    except Exception:
         return {}
 
 @st.cache_data(show_spinner=False)
 def build_full_schema_dict(database: str) -> dict:
+    """Returns {TABLE_NAME: {COL_NAME: DATA_TYPE}} — all keys uppercase."""
     schema_sql = f"""
         SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE
         FROM {database}.INFORMATION_SCHEMA.COLUMNS
@@ -426,15 +231,14 @@ def build_full_schema_dict(database: str) -> dict:
         for _, row in df.iterrows():
             tbl = row["TABLE_NAME"].upper()
             col = row["COLUMN_NAME"].upper()
-            dtype = row["DATA_TYPE"]
-            if tbl not in schema_dict:
-                schema_dict[tbl] = {}
-            schema_dict[tbl][col] = dtype
+            dtype = row["DATA_TYPE"].upper()
+            schema_dict.setdefault(tbl, {})[col] = dtype
         return schema_dict
-    except Exception as e:
+    except Exception:
         return {}
 
-def whitelist_to_strict_block(wl: dict[str, list[str]]) -> str:
+def whitelist_to_strict_block(wl: dict) -> str:
+    """Numbered list of every table and column — used in LLM system prompt."""
     lines = []
     idx = 1
     for tbl, cols in wl.items():
@@ -444,8 +248,282 @@ def whitelist_to_strict_block(wl: dict[str, list[str]]) -> str:
             idx += 1
     return "\n".join(lines)
 
+def build_date_type_hints(schema_dict: dict) -> str:
+    """
+    Scans schema_dict for columns that are declared as DATE or TIMESTAMP.
+    Returns a human-readable block telling the LLM exactly which columns
+    are native date types (so it must NOT wrap them in TO_DATE / LPAD).
+    """
+    native_date_cols = []
+    native_ts_cols   = []
+    numeric_date_cols = []
+
+    DATE_TYPES = {"DATE"}
+    TS_TYPES   = {"TIMESTAMP_NTZ","TIMESTAMP_LTZ","TIMESTAMP_TZ","TIMESTAMP","DATETIME","TIME"}
+    NUM_TYPES  = {"NUMBER","NUMERIC","INTEGER","INT","BIGINT","SMALLINT","FLOAT","DOUBLE","DECIMAL"}
+    TEXT_TYPES = {"TEXT","VARCHAR","CHAR","STRING","NVARCHAR"}
+
+    for tbl, cols in schema_dict.items():
+        for col, dtype in cols.items():
+            base = dtype.split("(")[0].upper()
+            if base in DATE_TYPES:
+                native_date_cols.append(f"{tbl}.{col}")
+            elif base in TS_TYPES:
+                native_ts_cols.append(f"{tbl}.{col}")
+            elif base in NUM_TYPES:
+                # Could be an integer-encoded date — flag for LLM awareness
+                kw = col.lower()
+                if any(k in kw for k in ["date","time","dt","day","month","year","_at","_on"]):
+                    numeric_date_cols.append(f"{tbl}.{col}")
+
+    lines = ["════════════════════════════════════════════════════════",
+             "⛔ ABSOLUTE RULE #2 — DATE COLUMN TYPES (READ CAREFULLY)",
+             "════════════════════════════════════════════════════════"]
+
+    if native_date_cols:
+        lines.append("\n✅ NATIVE DATE columns — use DIRECTLY with YEAR(), MONTH(), DATE_TRUNC():")
+        lines.append("   ⛔ NEVER wrap these in TO_DATE(), LPAD(), or CAST()!")
+        for c in native_date_cols:
+            lines.append(f"   • {c}")
+
+    if native_ts_cols:
+        lines.append("\n✅ NATIVE TIMESTAMP columns — use DATE_TRUNC() or CAST(col AS DATE):")
+        lines.append("   ⛔ NEVER wrap these in TO_DATE() or LPAD()!")
+        for c in native_ts_cols:
+            lines.append(f"   • {c}")
+
+    if numeric_date_cols:
+        lines.append("\n⚠️  NUMERIC columns that MAY store encoded dates (INTEGER format):")
+        lines.append("   For YYYYMMDD integers: TO_DATE(LPAD(CAST(col AS VARCHAR),8,'0'),'YYYYMMDD')")
+        lines.append("   For DDMMYYYY integers: TO_DATE(LPAD(CAST(col AS VARCHAR),8,'0'),'DDMMYYYY')")
+        for c in numeric_date_cols:
+            lines.append(f"   • {c}")
+
+    lines.append("""
+GENERAL DATE RULES:
+  • Native DATE   → use col directly: YEAR(col), DATE_TRUNC('MONTH', col), col >= '2025-01-01'
+  • Native TS     → use CAST(col AS DATE) first, then apply date functions
+  • Integer dates → convert with TO_DATE(LPAD(CAST(col AS VARCHAR), 8, '0'), 'FORMAT') first
+
+TIME-SERIES BEST PRACTICES:
+  • Monthly trend: SELECT DATE_TRUNC('MONTH', col) AS MONTH, SUM(...) ... GROUP BY 1 ORDER BY 1
+  • Filter year:   WHERE YEAR(col) = 2025
+  • Filter range:  WHERE col BETWEEN '2025-01-01' AND '2025-12-31'
+  • Always ORDER BY the time column in time-series queries""")
+
+    return "\n".join(lines)
+
 # ─────────────────────────────────────────────────────────────────
-#  SQL KEYWORDS
+#  DATE FORMAT DETECTION & SQL REPAIR
+# ─────────────────────────────────────────────────────────────────
+_date_fmt_cache: dict = {}
+
+def detect_col_date_format(database: str, table_name: str, col_name: str) -> str:
+    """
+    Returns the storage format of a date-related column.
+    Uses INFORMATION_SCHEMA declared type first (authoritative),
+    then falls back to sampling real data.
+
+    Return values: 'date' | 'timestamp' | 'yyyymmdd_int' | 'ddmmyyyy_int' |
+                   'yyyymmdd_str' | 'ddmmyyyy_str' | 'yyyymmdd_dashed' |
+                   'ddmmyyyy_dashed' | 'yyyymm_int' | 'unknown'
+    """
+    cache_key = (database.upper(), table_name.upper(), col_name.upper())
+    if cache_key in _date_fmt_cache:
+        return _date_fmt_cache[cache_key]
+
+    def _store(fmt: str) -> str:
+        _date_fmt_cache[cache_key] = fmt
+        return fmt
+
+    # Step 1 — INFORMATION_SCHEMA declared type (most reliable)
+    try:
+        parts       = table_name.upper().split(".")
+        tbl_only    = parts[-1]
+        schema_part = parts[-2] if len(parts) >= 2 else None
+        sf          = f"AND TABLE_SCHEMA = '{schema_part}'" if schema_part else ""
+        type_sql    = f"""
+            SELECT DATA_TYPE FROM {database}.INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = '{tbl_only}' AND COLUMN_NAME = '{col_name.upper()}' {sf}
+            LIMIT 1
+        """
+        tdf = run_query(type_sql, database)
+        if not tdf.empty:
+            declared = str(tdf.iloc[0]["DATA_TYPE"]).upper().split("(")[0]
+            if declared == "DATE":
+                return _store("date")
+            if declared in ("TIMESTAMP_NTZ","TIMESTAMP_LTZ","TIMESTAMP_TZ","TIMESTAMP","DATETIME","TIME"):
+                return _store("timestamp")
+            # NUMBER/TEXT → fall through to sampling
+    except Exception:
+        pass
+
+    # Step 2 — sample actual values
+    try:
+        sdf = run_query(
+            f"SELECT TO_VARCHAR({col_name}) AS V FROM {table_name} WHERE {col_name} IS NOT NULL LIMIT 5",
+            database,
+        )
+        if sdf.empty:
+            return _store("unknown")
+        val = str(sdf.iloc[0]["V"]).strip()
+
+        if _re.match(r'^\d{4}-\d{2}-\d{2}', val):        # "2025-01-15"
+            return _store("date")
+        if _re.match(r'^\d{8}$', val):
+            yr = int(val[:4])
+            if 1900 <= yr <= 2100:
+                return _store("yyyymmdd_int")
+            dd, mm = int(val[:2]), int(val[2:4])
+            if 1 <= dd <= 31 and 1 <= mm <= 12:
+                return _store("ddmmyyyy_int")
+            return _store("yyyymmdd_int")
+        if _re.match(r'^\d{6}$', val):
+            return _store("yyyymm_int")
+        if _re.match(r'^\d{2}[-/]\d{2}[-/]\d{4}$', val):
+            return _store("ddmmyyyy_dashed")
+        if _re.match(r'^\d{4}[-/]\d{2}[-/]\d{2}$', val):
+            return _store("yyyymmdd_dashed")
+        return _store("unknown")
+    except Exception:
+        return _store("unknown")
+
+
+def _to_date_expr(alias_col: str, fmt: str) -> str:
+    """Wraps alias_col in the correct TO_DATE() conversion for its format."""
+    if fmt == "date":
+        return alias_col
+    if fmt == "timestamp":
+        return f"CAST({alias_col} AS DATE)"
+    if fmt == "yyyymmdd_int":
+        return f"TO_DATE(LPAD(CAST({alias_col} AS VARCHAR),8,'0'),'YYYYMMDD')"
+    if fmt == "ddmmyyyy_int":
+        return f"TO_DATE(LPAD(CAST({alias_col} AS VARCHAR),8,'0'),'DDMMYYYY')"
+    if fmt == "yyyymmdd_str":
+        return f"TO_DATE(CAST({alias_col} AS VARCHAR),'YYYYMMDD')"
+    if fmt == "ddmmyyyy_str":
+        return f"TO_DATE(CAST({alias_col} AS VARCHAR),'DDMMYYYY')"
+    if fmt == "ddmmyyyy_dashed":
+        return f"TO_DATE({alias_col},'DD-MM-YYYY')"
+    if fmt == "yyyymmdd_dashed":
+        return f"TO_DATE({alias_col},'YYYY-MM-DD')"
+    if fmt == "yyyymm_int":
+        return f"TO_DATE(CAST({alias_col} AS VARCHAR)||'01','YYYYMMDD')"
+    return f"TRY_TO_DATE(TO_VARCHAR({alias_col}))"
+
+
+def fix_date_filter_in_sql(sql: str, database: str) -> str:
+    """
+    Two-pass repair:
+      Pass 1 — STRIP bad TO_DATE(LPAD(...)) wrappers from native DATE cols.
+      Pass 2 — WRAP integer/string date cols with correct conversion.
+    """
+    # Build alias → table map
+    table_aliases: dict = {}
+    for m in _re.finditer(
+        r'\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*)\b',
+        sql, _re.IGNORECASE
+    ):
+        table_aliases[m.group(2).upper()] = m.group(1).upper()
+
+    # Collect all alias.col pairs that look date-related
+    date_refs = _re.findall(
+        r'\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_]*(?:KEY|DATE|TIME|DT|DAY|MONTH|YEAR|AT|ON)[A-Za-z0-9_]*)\b',
+        sql, _re.IGNORECASE
+    )
+
+    seen: set = set()
+    for alias, col in date_refs:
+        key = f"{alias.upper()}.{col.upper()}"
+        if key in seen:
+            continue
+        seen.add(key)
+
+        table_name = table_aliases.get(alias.upper(), alias.upper())
+        fmt        = detect_col_date_format(database, table_name, col)
+        ac         = f"{alias}.{col}"   # e.g. "d.DATE"
+
+        if fmt in ("date", "timestamp"):
+            # ── PASS 1: strip any LLM-generated wrapper ──
+            # TO_DATE(LPAD(CAST(ac AS VARCHAR), N, '0'), '...')
+            sql = _re.sub(
+                rf"TO_DATE\s*\(\s*LPAD\s*\(\s*CAST\s*\(\s*{_re.escape(ac)}\s+AS\s+VARCHAR\s*\)"
+                rf"\s*,\s*\d+\s*,\s*'0'\s*\)\s*,\s*'[^']+'\s*\)",
+                ac, sql, flags=_re.IGNORECASE
+            )
+            # TO_DATE(CAST(ac AS VARCHAR), '...')
+            sql = _re.sub(
+                rf"TO_DATE\s*\(\s*CAST\s*\(\s*{_re.escape(ac)}\s+AS\s+VARCHAR\s*\)\s*,\s*'[^']+'\s*\)",
+                ac, sql, flags=_re.IGNORECASE
+            )
+            # TO_DATE(ac, '...')
+            sql = _re.sub(
+                rf"TO_DATE\s*\(\s*{_re.escape(ac)}\s*,\s*'[^']+'\s*\)",
+                ac, sql, flags=_re.IGNORECASE
+            )
+            # TRY_TO_DATE(TO_VARCHAR(ac))
+            sql = _re.sub(
+                rf"TRY_TO_DATE\s*\(\s*TO_VARCHAR\s*\(\s*{_re.escape(ac)}\s*\)\s*\)",
+                ac, sql, flags=_re.IGNORECASE
+            )
+            # For TIMESTAMP: wrap with CAST(... AS DATE) inside date functions
+            if fmt == "timestamp":
+                cast_expr = f"CAST({ac} AS DATE)"
+                for fn in ("YEAR","MONTH","DAY"):
+                    sql = _re.sub(
+                        rf'\b{fn}\s*\(\s*{_re.escape(ac)}\s*\)',
+                        f'{fn}({cast_expr})',
+                        sql, flags=_re.IGNORECASE
+                    )
+                sql = _re.sub(
+                    rf"DATE_TRUNC\s*\(\s*'([^']+)'\s*,\s*{_re.escape(ac)}\s*\)",
+                    lambda m: f"DATE_TRUNC('{m.group(1)}',{cast_expr})",
+                    sql, flags=_re.IGNORECASE
+                )
+        else:
+            # ── PASS 2: wrap integer/string dates correctly ──
+            date_expr = _to_date_expr(ac, fmt)
+            # YEAR(ac) = YYYY
+            sql = _re.sub(
+                rf'YEAR\s*\(\s*{_re.escape(ac)}\s*\)',
+                f'YEAR({date_expr})',
+                sql, flags=_re.IGNORECASE
+            )
+            # MONTH(ac)
+            sql = _re.sub(
+                rf'MONTH\s*\(\s*{_re.escape(ac)}\s*\)',
+                f'MONTH({date_expr})',
+                sql, flags=_re.IGNORECASE
+            )
+            # FLOOR(ac / 10000) = YYYY
+            sql = _re.sub(
+                rf'FLOOR\s*\(\s*{_re.escape(ac)}\s*/\s*10000\s*\)',
+                f'YEAR({date_expr})',
+                sql, flags=_re.IGNORECASE
+            )
+            # DATE_TRUNC('...', ac)
+            sql = _re.sub(
+                rf"DATE_TRUNC\s*\(\s*'([^']+)'\s*,\s*{_re.escape(ac)}\s*\)",
+                lambda m: f"DATE_TRUNC('{m.group(1)}',{date_expr})",
+                sql, flags=_re.IGNORECASE
+            )
+            # TO_CHAR(ac, '...')
+            sql = _re.sub(
+                rf"TO_CHAR\s*\(\s*{_re.escape(ac)}\s*,\s*'([^']+)'\s*\)",
+                lambda m: f"TO_CHAR({date_expr},'{m.group(1)}')",
+                sql, flags=_re.IGNORECASE
+            )
+            # EXTRACT(YEAR FROM ac)
+            sql = _re.sub(
+                rf"EXTRACT\s*\(\s*(\w+)\s+FROM\s+{_re.escape(ac)}\s*\)",
+                lambda m: f"EXTRACT({m.group(1)} FROM {date_expr})",
+                sql, flags=_re.IGNORECASE
+            )
+
+    return sql
+
+# ─────────────────────────────────────────────────────────────────
+#  SQL VALIDATION WHITELIST
 # ─────────────────────────────────────────────────────────────────
 SQL_KEYWORDS = {
     "select","from","where","join","on","and","or","not","in","is","null","inner",
@@ -462,7 +540,7 @@ SQL_KEYWORDS = {
     "to_date","to_timestamp","to_number","to_varchar","to_char","to_decimal",
     "current_date","current_timestamp","current_time","current_user",
     "current_schema","current_database","current_warehouse","current_role",
-    "datetrunc","date_trunc","extract","datediff","timediff","timestampdiff",
+    "datetrunc","date_trunc","extract","timediff","timestampdiff",
     "last_day","next_day","previous_day","iff","zeroifnull","nullifzero",
     "object_construct","array_construct","flatten","lateral","any_value",
     "listagg","median","mode","stddev","variance","corr","regr_slope",
@@ -473,29 +551,40 @@ SQL_KEYWORDS = {
     "o","p","q","r","s","t","u","v","w","x","y","z",
     "1","2","3","4","5","6","7","8","9","0",
     "information_schema","sys","public",
+    "lpad","rpad","replace","split","split_part","charindex","position",
+    "try_to_date","try_to_timestamp","try_to_number","nvl","nvl2",
+    "greatest","least","div0","mod","sign","typeof","array_size",
+    "date_part","dayofweek","dayofyear","weekofyear","quarter",
+    "monthname","dayname","last_value","first_value","lag","lead",
+    "ntile","percent_rank","cume_dist","ratio_to_report",
 }
 
-def extract_sql_identifiers(sql: str) -> list[str]:
-    sql_clean = _re.sub(r"'[^']*'", "", sql)
-    sql_clean = _re.sub(r"--[^\n]*", "", sql_clean)
-    sql_clean = _re.sub(r"/\*.*?\*/", "", sql_clean, flags=_re.DOTALL)
-    return _re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', sql_clean)
-
-def validate_sql_against_whitelist(sql: str, wl: dict[str, list[str]]) -> tuple[bool, list[str]]:
+def validate_sql_against_whitelist(sql: str, wl: dict) -> tuple:
     if not sql or not wl:
         return True, []
     valid_tables  = {t.lower() for t in wl}
     valid_columns = {c.lower() for cols in wl.values() for c in cols}
     valid_all     = valid_tables | valid_columns | SQL_KEYWORDS
-    aliases = {a.lower() for a in _re.findall(r'\bAS\s+([a-zA-Z_][a-zA-Z0-9_]*)\b', sql, _re.IGNORECASE)}
+
+    # Collect aliases defined in this SQL
+    aliases: set = set()
+    for a in _re.findall(r'\bAS\s+([A-Za-z_][A-Za-z0-9_]*)\b', sql, _re.IGNORECASE):
+        aliases.add(a.lower())
     for tbl, alias in _re.findall(
-        r'\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+(?:AS\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\b',
+        r'\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*)\b',
         sql, _re.IGNORECASE
     ):
         aliases.add(alias.lower())
+
     allowed = valid_all | aliases
+
+    # Strip string literals, comments before scanning
+    sql_clean = _re.sub(r"'[^']*'", "", sql)
+    sql_clean = _re.sub(r"--[^\n]*", "", sql_clean)
+    sql_clean = _re.sub(r"/\*.*?\*/", "", sql_clean, flags=_re.DOTALL)
+
     bad, seen = [], set()
-    for word in extract_sql_identifiers(sql):
+    for word in _re.findall(r'\b([A-Za-z_][A-Za-z0-9_]*)\b', sql_clean):
         if word.lower() not in allowed and not word.isdigit() and len(word) > 1:
             if word.lower() not in seen:
                 seen.add(word.lower())
@@ -503,320 +592,223 @@ def validate_sql_against_whitelist(sql: str, wl: dict[str, list[str]]) -> tuple[
     return (len(bad) == 0), bad
 
 # ─────────────────────────────────────────────────────────────────
-#  COLOR EXTRACTION
+#  COLOR / AXIS / PERCENTAGE HELPERS
 # ─────────────────────────────────────────────────────────────────
 COLOR_NAME_MAP = {
-    "red": "#E53935", "green": "#43A047", "blue": "#1565C0",
-    "yellow": "#FDD835", "orange": "#FB8C00", "purple": "#8E24AA",
-    "pink": "#E91E63", "teal": "#00897B", "cyan": "#00ACC1",
-    "indigo": "#3949AB", "lime": "#C0CA33", "amber": "#FFB300",
-    "brown": "#6D4C41", "grey": "#757575", "gray": "#757575",
-    "black": "#212121", "white": "#FFFFFF", "navy": "#1A237E",
-    "maroon": "#880E4F", "violet": "#6A1B9A", "gold": "#F9A825",
-    "silver": "#9E9E9E", "coral": "#FF7043", "magenta": "#D81B60",
-    "turquoise": "#00BCD4", "lavender": "#7E57C2", "rose": "#E91E63",
-    "crimson": "#B71C1C", "salmon": "#EF9A9A", "khaki": "#F9A825",
+    "red":"#E53935","green":"#43A047","blue":"#1565C0","yellow":"#FDD835",
+    "orange":"#FB8C00","purple":"#8E24AA","pink":"#E91E63","teal":"#00897B",
+    "cyan":"#00ACC1","indigo":"#3949AB","lime":"#C0CA33","amber":"#FFB300",
+    "brown":"#6D4C41","grey":"#757575","gray":"#757575","black":"#212121",
+    "white":"#FFFFFF","navy":"#1A237E","maroon":"#880E4F","violet":"#6A1B9A",
+    "gold":"#F9A825","silver":"#9E9E9E","coral":"#FF7043","magenta":"#D81B60",
+    "turquoise":"#00BCD4","lavender":"#7E57C2","rose":"#E91E63",
+    "crimson":"#B71C1C","salmon":"#EF9A9A","khaki":"#F9A825",
 }
 
-def extract_color_from_question(question: str) -> str | None:
+def extract_color_from_question(question: str):
     q = question.lower()
-    hex_match = _re.search(r'#?([0-9a-fA-F]{6})\b', question)
-    if hex_match:
-        return f"#{hex_match.group(1).upper()}"
-    for name, hex_val in COLOR_NAME_MAP.items():
+    hx = _re.search(r'#?([0-9a-fA-F]{6})\b', question)
+    if hx:
+        return f"#{hx.group(1).upper()}"
+    for name, hval in COLOR_NAME_MAP.items():
         if _re.search(rf'\b{name}\b', q):
-            return hex_val
+            return hval
     return None
 
 def detect_color_change_target(question: str) -> str:
     q = question.lower()
-    has_color = bool(extract_color_from_question(question))
-    if not has_color:
+    if not extract_color_from_question(question):
         return "none"
-    title_pattern = bool(_re.search(
-        r'\btitle\s+(color|colour)\b'
-        r'|\b(color|colour)\s+(of\s+)?(the\s+)?title\b'
+    title_pat = bool(_re.search(
+        r'\btitle\s+(color|colour)\b|\b(color|colour)\s+(of\s+)?(the\s+)?title\b'
         r'|\bchange\b.{0,20}\btitle\b.{0,20}\b(color|colour)\b'
-        r'|\b(color|colour)\b.{0,20}\btitle\b',
-        q
-    ))
-    chart_pattern = bool(_re.search(
+        r'|\b(color|colour)\b.{0,20}\btitle\b', q))
+    chart_pat = bool(_re.search(
         r'\b(chart|bar|line|graph|plot|area|scatter|series)\s+(color|colour)\b'
         r'|\b(color|colour)\s+(of\s+)?(the\s+)?(chart|bar|bars|line|graph|plot)\b'
         r'|\bchange\b.{0,30}\b(chart|bar|bars|line|graph|plot)\b.{0,30}\b(color|colour)\b'
-        r'|\b(color|colour)\b.{0,20}\b(chart|bar|bars|line|graph|series)\b',
-        q
-    ))
-    if title_pattern and not chart_pattern:
-        return "title"
-    if chart_pattern and not title_pattern:
-        return "chart"
+        r'|\b(color|colour)\b.{0,20}\b(chart|bar|bars|line|graph|series)\b', q))
+    if title_pat and not chart_pat: return "title"
+    if chart_pat and not title_pat: return "chart"
     return "both"
 
-# ─────────────────────────────────────────────────────────────────
-#  HELPER UTILS
-# ─────────────────────────────────────────────────────────────────
-def is_chart_request(text: str) -> bool:
-    return any(k in text.lower() for k in ["chart","graph","plot","visualize","line","bar","pie","donut","seaborn","matplotlib","heatmap","violin","box"])
+def detect_axis_label_change(question: str) -> dict:
+    """Parse requests like 'change x axis label to Month' or 'set y axis title to Revenue'."""
+    q   = question.lower()
+    res = {}
+    xp  = [
+        r'\bx[\s\-]?axis\s+(?:title|label|name)\s+(?:to|as|=)\s*["\']?(.+?)["\']?\s*$',
+        r'\b(?:change|rename|set|update)\s+(?:the\s+)?x[\s\-]?axis\s+(?:title|label|name)\s+(?:to|as)\s*["\']?(.+?)["\']?\s*$',
+        r'\b(?:change|rename|set|update)\s+(?:the\s+)?x[\s\-]?(?:axis)?\s+(?:title|label)\s+(?:to|as)\s*["\']?(.+?)["\']?\s*$',
+        r'\blabel\s+(?:the\s+)?x[\s\-]?axis\s+(?:as|to)\s*["\']?(.+?)["\']?\s*$',
+    ]
+    for pat in xp:
+        m = _re.search(pat, q)
+        if m:
+            res["x_label"] = m.group(1).strip().strip("\"'")
+            break
+    yp = [
+        r'\by[\s\-]?axis\s+(?:title|label|name)\s+(?:to|as|=)\s*["\']?(.+?)["\']?\s*$',
+        r'\b(?:change|rename|set|update)\s+(?:the\s+)?y[\s\-]?axis\s+(?:title|label|name)\s+(?:to|as)\s*["\']?(.+?)["\']?\s*$',
+        r'\b(?:change|rename|set|update)\s+(?:the\s+)?y[\s\-]?(?:axis)?\s+(?:title|label)\s+(?:to|as)\s*["\']?(.+?)["\']?\s*$',
+        r'\blabel\s+(?:the\s+)?y[\s\-]?axis\s+(?:as|to)\s*["\']?(.+?)["\']?\s*$',
+    ]
+    for pat in yp:
+        m = _re.search(pat, q)
+        if m:
+            res["y_label"] = m.group(1).strip().strip("\"'")
+            break
+    return res
+
+def is_axis_label_only_request(question: str) -> bool:
+    if not detect_axis_label_change(question):
+        return False
+    q = question.lower()
+    data_words = ["show","list","count","total","sum","average","how many",
+                  "what is","give me","top","bottom","trend","compare"]
+    return not any(w in q for w in data_words)
+
+def is_percentage_query(question: str) -> bool:
+    q = question.lower()
+    return any(k in q for k in [
+        "percent","percentage","proportion","share","distribution","breakdown",
+        "ratio","composition","what portion","how much of","% of","pie","donut",
+        "split","contribution",
+    ])
 
 # ─────────────────────────────────────────────────────────────────
-#  NUMBER FORMATTING — round floats to 0 dp, add currency symbol
+#  NUMBER FORMATTING
 # ─────────────────────────────────────────────────────────────────
-# INR keywords in column name → ₹ prefix
-_INR_KEYWORDS = ["inr", "rupee", "rupees"]
-# Currency keywords → $ by default
-_CURRENCY_KEYWORDS = [
-    "revenue", "salary", "price", "cost", "fee",
-    "earning", "earnings", "profit", "loss", "budget",
-    "expense", "expenses", "payment", "payments",
-    "usd", "dollar", "dollars", "amount_paid", "unit_price",
-    "sale_price", "list_price", "invoice_amount","total_sales","Total_revenue",
-]
+_INR_KW  = ["inr","rupee","rupees"]
+_USD_KW  = ["revenue","salary","price","cost","fee","earning","earnings",
+            "profit","loss","budget","expense","expenses","payment","payments",
+            "usd","dollar","dollars","amount_paid","unit_price","sale_price",
+            "list_price","invoice_amount","total_sales","total_revenue","sales"]
 
-def _get_currency_symbol(col_name: str) -> str | None:
-    """Return '$' or '₹' ONLY if column name is explicitly a currency field."""
-    c = col_name.lower()
-    if any(k in c for k in _INR_KEYWORDS):
-        return "₹"
-    # Must be an exact word-boundary match, not a substring of unrelated words
-    import re as _re2
-    for kw in _CURRENCY_KEYWORDS:
-        if _re2.search(rf'(^|_){_re2.escape(kw)}($|_)', c):
-            return "$"
+def _currency_symbol(col: str):
+    c = col.lower()
+    if any(k in c for k in _INR_KW): return "₹"
+    for kw in _USD_KW:
+        if _re.search(rf'(^|_){_re.escape(kw)}($|_)', c): return "$"
     return None
 
 def format_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Round all numeric columns to 0 decimal places.
-    Add currency prefix ($ or ₹) WITH thousand separators for currency columns.
-    Plain numeric columns (counts, litres, quantities) get NO comma formatting.
-    """
     display = df.copy()
     for col in display.columns:
         is_float   = pd.api.types.is_float_dtype(display[col])
         is_integer = pd.api.types.is_integer_dtype(display[col])
-
         if not is_float and not is_integer:
             try:
-                converted = pd.to_numeric(display[col], errors="raise")
-                display[col] = converted
+                display[col] = pd.to_numeric(display[col], errors="raise")
                 is_float   = pd.api.types.is_float_dtype(display[col])
                 is_integer = pd.api.types.is_integer_dtype(display[col])
             except Exception:
                 pass
-
         if is_float or is_integer:
-            symbol = _get_currency_symbol(col)
+            sym = _currency_symbol(col)
             try:
                 rounded = display[col].round(0).fillna(0).astype(int)
             except Exception:
-                try:
-                    rounded = display[col].round(0)
-                except Exception:
-                    continue
-
-            if symbol:
-                # Currency → add symbol + thousand separators
-                display[col] = rounded.apply(
-                    lambda v: f"{symbol}{int(v):,}" if pd.notna(v) else ""
-                )
+                try: rounded = display[col].round(0)
+                except Exception: continue
+            if sym:
+                display[col] = rounded.apply(lambda v: f"{sym}{int(v):,}" if pd.notna(v) else "")
             else:
-                # Plain number (litres, count, quantity, etc.) → just round, no commas
-                display[col] = rounded.apply(
-                    lambda v: f"{int(v)}" if pd.notna(v) else ""
-                )
+                display[col] = rounded.apply(lambda v: f"{int(v)}" if pd.notna(v) else "")
     return display
 
+# ─────────────────────────────────────────────────────────────────
+#  SAMPLE QUESTIONS
+# ─────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
-def get_sample_questions(database: str) -> list[str]:
+def get_sample_questions(database: str) -> list:
     wl = build_whitelist(database)
     if not wl:
-        return [
-            "How many total records do we have?",
-            "What does the overall data look like?",
-            "Show me a summary of the main numbers",
-            "What are the top 5 entries overall?",
-        ]
-    schema_lines = []
-    for tbl, cols in list(wl.items())[:20]:
-        schema_lines.append(f"Table '{tbl}': columns → {', '.join(cols)}")
-    schema_hint = "\n".join(schema_lines)
+        return ["How many total records do we have?","What does the overall data look like?",
+                "Show me a summary of the main numbers","What are the top 5 entries overall?"]
+    schema_lines   = [f"Table '{t}': columns → {', '.join(c)}" for t,c in list(wl.items())[:20]]
+    schema_hint    = "\n".join(schema_lines)
     table_names_str = ", ".join(list(wl.keys())[:20])
     try:
         client = Groq(api_key=GROQ_API_KEY)
-        resp = client.chat.completions.create(
+        resp   = client.chat.completions.create(
             model=GROQ_MODEL,
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a senior business analyst. Your job is to generate EXACTLY 4 "
-                        "plain-English questions that a non-technical manager would ask about "
-                        "their business data — based on the real database schema provided.\n\n"
-                        "STRICT RULES:\n"
-                        "1. Read the table names and column names carefully.\n"
-                        "2. Generate questions DIRECTLY related to the actual tables and columns.\n"
-                        "3. NEVER mention any table name, column name, or SQL term.\n"
-                        "4. Each question must target a DIFFERENT insight.\n"
-                        "5. Questions must sound like a real person talking to an assistant.\n"
-                        "6. Keep each question under 12 words.\n"
-                        "7. Output ONLY a valid JSON array of exactly 4 strings.\n\n"
-                        "EXAMPLES for a sales database:\n"
-                        '["What is our total revenue this month?", '
-                        '"Which products are selling the most?", '
-                        '"Who are our top 10 customers by spending?", '
-                        '"How many orders are still pending?"]'
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Database name: {database}\n"
-                        f"Tables present: {table_names_str}\n\n"
-                        f"Full schema details:\n{schema_hint}\n\n"
-                        "Generate 4 relevant business questions. Output ONLY a JSON array of 4 strings."
-                    ),
-                },
+                {"role":"system","content":(
+                    "You are a senior business analyst. Generate EXACTLY 4 plain-English questions "
+                    "a non-technical manager would ask about their business data.\n"
+                    "RULES: 1) Base on real schema. 2) Never mention table/column names. "
+                    "3) Each targets a different insight. 4) Under 12 words each. "
+                    "5) Output ONLY a valid JSON array of 4 strings.")},
+                {"role":"user","content":(
+                    f"Database: {database}\nTables: {table_names_str}\n\nSchema:\n{schema_hint}\n\n"
+                    "Output ONLY a JSON array of 4 strings.")},
             ],
-            temperature=0.3,
-            max_tokens=400,
+            temperature=0.3, max_tokens=400,
         )
         raw = resp.choices[0].message.content.strip()
-        raw = _re.sub(r"^```[a-z]*\n?", "", raw).strip("`").strip()
-        json_match = _re.search(r'\[.*?\]', raw, _re.DOTALL)
-        if json_match:
-            raw = json_match.group(0)
-        questions = json.loads(raw)
-        if isinstance(questions, list) and len(questions) >= 2:
-            return [str(q) for q in questions[:4]]
+        raw = _re.sub(r"^```[a-z]*\n?","",raw).strip("`").strip()
+        m   = _re.search(r'\[.*?\]', raw, _re.DOTALL)
+        if m: raw = m.group(0)
+        qs = json.loads(raw)
+        if isinstance(qs, list) and len(qs) >= 2:
+            return [str(q) for q in qs[:4]]
     except Exception:
         pass
-
-    tables_lower = " ".join(wl.keys()).lower()
-    all_cols_lower = " ".join(c for cols in wl.values() for c in cols).lower()
-    combined = tables_lower + " " + all_cols_lower
-
-    if any(k in combined for k in ["student","class","attendance","fee","grade","subject","mark"]):
-        return [
-            "How many students are currently enrolled?",
-            "Which class has the best attendance?",
-            "Who are the top 10 performing students?",
-            "How much fee collection is pending?",
-        ]
-    elif any(k in combined for k in ["order","product","sale","customer","invoice","revenue","amount"]):
-        return [
-            "What is our total revenue this year?",
-            "Who are our top 10 customers?",
-            "Which products sell the most?",
-            "How many orders are still pending?",
-        ]
-    elif any(k in combined for k in ["employee","staff","department","payroll","salary"]):
-        return [
-            "How many employees do we have?",
-            "Which department has the most staff?",
-            "What is the average salary by department?",
-            "Who joined the company this year?",
-        ]
-    else:
-        first_tables = list(wl.keys())[:1]
-        hint = f" in {first_tables[0]}" if first_tables else ""
-        return [
-            f"How many total records do we have{hint}?",
-            "Show me the top 10 entries by count",
-            "What is the overall breakdown by category?",
-            "Give me a summary of the latest data",
-        ]
+    combined = " ".join(wl.keys()).lower() + " " + " ".join(c for cols in wl.values() for c in cols).lower()
+    if any(k in combined for k in ["student","class","attendance","fee","grade"]):
+        return ["How many students are currently enrolled?","Which class has the best attendance?",
+                "Who are the top 10 performing students?","How much fee collection is pending?"]
+    if any(k in combined for k in ["order","product","sale","customer","revenue"]):
+        return ["What is our total revenue this year?","Who are our top 10 customers?",
+                "Which products sell the most?","How many orders are still pending?"]
+    if any(k in combined for k in ["employee","staff","department","payroll","salary"]):
+        return ["How many employees do we have?","Which department has the most staff?",
+                "What is the average salary by department?","Who joined the company this year?"]
+    hint = f" in {list(wl.keys())[0]}" if wl else ""
+    return [f"How many total records do we have{hint}?","Show me the top 10 entries by count",
+            "What is the overall breakdown by category?","Give me a summary of the latest data"]
 
 # ─────────────────────────────────────────────────────────────────
 #  LOGO HELPER
 # ─────────────────────────────────────────────────────────────────
 def img_to_b64(filename: str) -> str:
-    search_bases = [pathlib.Path(__file__).parent, pathlib.Path(".")]
-    extensions   = ["", ".png", ".jpg", ".jpeg", ".webp", ".svg"]
-    for base in search_bases:
-        for ext in extensions:
-            path = base / (filename + ext)
-            if path.exists() and path.is_file():
-                suffix = path.suffix.lower()
-                mime   = "image/svg+xml" if suffix == ".svg" else f"image/{suffix.lstrip('.')}"
-                data   = base64.b64encode(path.read_bytes()).decode()
-                return f"data:{mime};base64,{data}"
+    for base in [pathlib.Path(__file__).parent, pathlib.Path(".")]:
+        for ext in ["",".png",".jpg",".jpeg",".webp",".svg"]:
+            p = base / (filename + ext)
+            if p.exists() and p.is_file():
+                sfx  = p.suffix.lower()
+                mime = "image/svg+xml" if sfx == ".svg" else f"image/{sfx.lstrip('.')}"
+                return f"data:{mime};base64,{base64.b64encode(p.read_bytes()).decode()}"
     return ""
 
 # ─────────────────────────────────────────────────────────────────
-#  ADVANCED COLUMN RESOLUTION
-# ─────────────────────────────────────────────────────────────────
-def find_date_columns(schema_dict: dict, table_name: str) -> list[str]:
-    if table_name.upper() not in schema_dict:
-        return []
-    tbl = schema_dict[table_name.upper()]
-    date_keywords = ['date', 'time', 'timestamp', 'datetime', 'created', 'updated', 'at']
-    date_cols = []
-    for col_name, dtype in tbl.items():
-        col_lower = col_name.lower()
-        dtype_lower = dtype.lower()
-        if any(k in dtype_lower for k in ['date', 'timestamp', 'time']):
-            date_cols.append(col_name)
-        elif any(col_lower.startswith(k) or col_lower.endswith(k) for k in date_keywords):
-            date_cols.append(col_name)
-    return date_cols
-
-def find_numeric_columns(schema_dict: dict, table_name: str) -> list[str]:
-    if table_name.upper() not in schema_dict:
-        return []
-    tbl = schema_dict[table_name.upper()]
-    numeric_types = ['int', 'float', 'decimal', 'numeric', 'bigint', 'smallint', 'double', 'number']
-    numeric_cols = []
-    for col_name, dtype in tbl.items():
-        dtype_lower = dtype.lower()
-        if any(nt in dtype_lower for nt in numeric_types):
-            numeric_cols.append(col_name)
-    return numeric_cols
-
-def find_text_columns(schema_dict: dict, table_name: str) -> list[str]:
-    if table_name.upper() not in schema_dict:
-        return []
-    tbl = schema_dict[table_name.upper()]
-    text_types = ['varchar', 'char', 'text', 'string']
-    text_cols = []
-    for col_name, dtype in tbl.items():
-        dtype_lower = dtype.lower()
-        if any(tt in dtype_lower for tt in text_types):
-            text_cols.append(col_name)
-    return text_cols
-
-# ─────────────────────────────────────────────────────────────────
-#  NL → SQL  (Snowflake SQL dialect)
+#  NL → SQL
 # ─────────────────────────────────────────────────────────────────
 def nl_to_sql(question: str, history: list, database: str) -> dict:
-    wl = build_whitelist(database)
+    wl          = build_whitelist(database)
     schema_dict = build_full_schema_dict(database)
     strict_block = whitelist_to_strict_block(wl)
-    compact_block = "\n".join(
-        f"  {tbl}: {', '.join(cols)}"
-        for tbl, cols in wl.items()
-    )
+    compact_block = "\n".join(f"  {t}: {', '.join(c)}" for t,c in wl.items())
+    date_hints    = build_date_type_hints(schema_dict)
 
-    last_sql          = ""
-    last_chart        = "none"
-    last_chart_x      = ""
-    last_chart_y      = ""
-    last_chart_title  = ""
-    last_chart_color  = None
-    last_title_color  = None
-    last_summary      = ""
-    last_df           = None
+    # Pull last assistant turn
+    last_sql=last_chart=last_chart_x=last_chart_y=""; last_chart="none"
+    last_chart_title=last_summary=""; last_chart_color=last_title_color=None
+    last_x_label=last_y_label=last_df=None
     for m in reversed(history):
         if m.get("role") == "assistant" and m.get("sql"):
-            last_sql          = m["sql"]
-            last_chart        = m.get("chart", "none")
-            last_chart_x      = m.get("chart_x", "")
-            last_chart_y      = m.get("chart_y", "")
-            last_chart_title  = m.get("chart_title", "")
-            last_chart_color  = m.get("chart_color")
-            last_title_color  = m.get("title_color")
-            last_summary      = m.get("summary", "")
-            last_df           = m.get("df")
+            last_sql         = m["sql"]
+            last_chart       = m.get("chart","none")
+            last_chart_x     = m.get("chart_x","")
+            last_chart_y     = m.get("chart_y","")
+            last_chart_title = m.get("chart_title","")
+            last_chart_color = m.get("chart_color")
+            last_title_color = m.get("title_color")
+            last_x_label     = m.get("x_label")
+            last_y_label     = m.get("y_label")
+            last_summary     = m.get("summary","")
+            last_df          = m.get("df")
             break
 
     _q = question.strip().lower()
@@ -826,529 +818,355 @@ def nl_to_sql(question: str, history: list, database: str) -> dict:
         r'|\bcolor\b.{0,20}\b(to|as|into)\b'
         r'|\b(red|green|blue|yellow|orange|purple|pink|teal|cyan|indigo|lime|amber|'
         r'brown|grey|gray|black|navy|maroon|violet|gold|silver|coral|magenta|'
-        r'turquoise|lavender|rose|crimson|salmon|khaki)\b',
-        _q
-    ))
+        r'turquoise|lavender|rose|crimson|salmon|khaki)\b', _q))
     _CHART_TYPE = bool(_re.search(
         r'\b(make|change|convert|switch|turn)\b.{0,30}'
         r'\b(bar|line|pie|area|scatter|donut|histogram|funnel|treemap|sunburst|heatmap|violin|box|seaborn|matplotlib)\b'
-        r'|\b(bar|line|pie|area|scatter|donut|histogram|funnel|treemap|sunburst|heatmap|violin|box)\s+chart\b',
-        _q
-    ))
-    _TITLE_ONLY = bool(_re.search(
-        r'\b(change|set|update|rename)\b.{0,20}\btitle\b',
-        _q
-    ))
+        r'|\b(bar|line|pie|area|scatter|donut|histogram|funnel|treemap|sunburst|heatmap|violin|box)\s+chart\b', _q))
+    _TITLE_ONLY = bool(_re.search(r'\b(change|set|update|rename)\b.{0,20}\btitle\b', _q))
+    _axis_changes    = detect_axis_label_change(question)
+    _AXIS_LABEL_ONLY = is_axis_label_only_request(question)
 
-    _is_appearance_only = last_sql and (_COLOR_ONLY or _CHART_TYPE or _TITLE_ONLY)
+    _appearance_only = last_sql and (_COLOR_ONLY or _CHART_TYPE or _TITLE_ONLY or _AXIS_LABEL_ONLY)
 
-    if _is_appearance_only:
+    if _appearance_only:
         extracted_color = extract_color_from_question(question)
         color_target    = detect_color_change_target(question)
-
         new_chart_color = last_chart_color
         new_title_color = last_title_color
-
         if extracted_color:
             if color_target == "both":
-                new_chart_color = extracted_color
-                new_title_color = extracted_color
-            elif color_target == "chart":
-                new_chart_color = extracted_color
-            elif color_target == "title":
-                new_title_color = extracted_color
+                new_chart_color = extracted_color; new_title_color = extracted_color
+            elif color_target == "chart": new_chart_color = extracted_color
+            elif color_target == "title": new_title_color = extracted_color
 
         new_chart = last_chart
-        _ct_match = _re.search(
-            r'\b(bar|line|pie|area|scatter|donut|histogram|funnel|treemap|sunburst|heatmap|violin|box|seaborn_bar|seaborn_line|seaborn_heatmap|seaborn_violin|seaborn_box|matplotlib_bar|matplotlib_line|matplotlib_pie|matplotlib_hist)\b', _q
-        )
-        if _ct_match:
-            ct = _ct_match.group(1)
+        ct_m = _re.search(
+            r'\b(bar|line|pie|area|scatter|donut|histogram|funnel|treemap|sunburst|'
+            r'heatmap|violin|box|seaborn_bar|seaborn_line|seaborn_heatmap|seaborn_violin|'
+            r'seaborn_box|matplotlib_bar|matplotlib_line|matplotlib_pie|matplotlib_hist)\b', _q)
+        if ct_m:
+            ct = ct_m.group(1)
             if "seaborn" in _q and ct in ("bar","line","heatmap","violin","box"):
                 ct = f"seaborn_{ct}"
             elif "matplotlib" in _q and ct in ("bar","line","pie","hist","histogram"):
-                ct = f"matplotlib_{ct}" if ct != "histogram" else "matplotlib_hist"
+                ct = "matplotlib_hist" if ct == "histogram" else f"matplotlib_{ct}"
             new_chart = ct
 
         new_title = last_chart_title
-        _title_match = _re.search(r'title\s+to\s+["\']?(.+?)["\']?\s*$', _q)
-        if _title_match:
-            new_title = _title_match.group(1).strip().strip("\"'")
+        tm = _re.search(r'title\s+to\s+["\']?(.+?)["\']?\s*$', _q)
+        if tm: new_title = tm.group(1).strip().strip("\"'")
 
         return {
-            "sql":         last_sql,
-            "summary":     last_summary,
-            "chart":       new_chart,
-            "chart_x":     last_chart_x,
-            "chart_y":     last_chart_y,
-            "chart_title": new_title,
-            "chart_color": new_chart_color,
-            "title_color": new_title_color,
-            "_reuse_df":   last_df,
+            "sql":last_sql, "summary":last_summary, "chart":new_chart,
+            "chart_x":last_chart_x, "chart_y":last_chart_y, "chart_title":new_title,
+            "chart_color":new_chart_color, "title_color":new_title_color,
+            "x_label":_axis_changes.get("x_label", last_x_label),
+            "y_label":_axis_changes.get("y_label", last_y_label),
+            "_reuse_df":last_df,
         }
 
-    system_prompt = f"""You are an expert business intelligence assistant and STRICT Snowflake SQL query generator.
+    # ── Build the system prompt ──
+    system_prompt = f"""You are an expert Snowflake SQL generator for a business intelligence assistant.
 
 ════════════════════════════════════════════════════════
-CRITICAL INSTRUCTIONS FOR COLUMN & TABLE ACCURACY
+⛔ RULE 1 — ZERO TOLERANCE FOR INVENTED NAMES
 ════════════════════════════════════════════════════════
-1. EXACT MATCHING: Copy table and column names EXACTLY as they appear in the schema.
-2. CASE SENSITIVITY: Snowflake identifiers are case-insensitive but you MUST use the exact names from schema.
-3. NO GUESSING: If uncertain about a column name, ask the user or use generic aggregates.
-4. VERIFY EXISTENCE: Check the numbered list before writing any SQL.
+You MUST use ONLY table and column names from the EXACT numbered list below.
+- Copy names CHARACTER-FOR-CHARACTER. No guessing, abbreviating, pluralizing, or renaming.
+- If a concept has no matching column → set sql to "" and explain.
+- The numbered list is the ONLY source of truth for identifiers.
 
 ════════════════════════════════════════════════════════
-DATABASE SCHEMA (EXACT NAMES — NO CHANGES)
+DATABASE SCHEMA — NUMBERED (copy exactly)
 ════════════════════════════════════════════════════════
 {strict_block}
 
-ABSOLUTE RULES:
-✗ Do NOT modify, abbreviate, pluralize, or rename any identifier
-✓ Copy names character-for-character from the numbered list above
-✓ If no exact match exists → return sql as "" and explain
-
-TIME SERIES & DATE HANDLING — SNOWFLAKE SPECIFICS
-════════════════════════════════════════════════════════
-⚠️ CRITICAL — INTEGER DATE KEYS (e.g. TIMEKEY, DATE_KEY, DATEKEY):
-Many data warehouse fact tables store dates as INTEGER surrogate keys in YYYYMMDD format (e.g. 20250115).
-These are NUMBER columns — YEAR(), MONTH(), DATE_TRUNC(), EXTRACT() will ALL FAIL on them.
-
-DETECT integer date keys: column names containing 'key', 'id' with date context, or DATA_TYPE = NUMBER/INT.
-
-USE THESE PATTERNS for integer YYYYMMDD keys:
-- Year filter:   WHERE FLOOR(timekey / 10000) = 2025
-- Month filter:  WHERE FLOOR(timekey / 10000) = 2025 AND FLOOR(MOD(timekey, 10000) / 100) = 6
-- Day filter:    WHERE MOD(timekey, 100) = 15
-- Year extract:  FLOOR(timekey / 10000) AS year
-- Month extract: FLOOR(MOD(timekey, 10000) / 100) AS month
-- Day extract:   MOD(timekey, 100) AS day
-- Monthly group: FLOOR(timekey / 100) AS year_month  (gives 202501, 202502 etc.)
-- Convert to date: TO_DATE(CAST(timekey AS VARCHAR), 'YYYYMMDD')
-
-NEVER use YEAR(), MONTH(), EXTRACT(), DATE_TRUNC() on NUMBER/INT columns.
-If unsure whether a date column is DATE or INTEGER type → use FLOOR division approach as it works safely for integers, OR cast first: TO_DATE(CAST(col AS VARCHAR), 'YYYYMMDD').
-
-DATE FUNCTIONS (only for actual DATE/TIMESTAMP columns):
-- DATE_TRUNC('period', date_col): Truncates date to period (year, month, week, day, hour)
-- DATEADD('unit', num, date_col): Add/subtract time. Units: year, month, week, day, hour, minute, second
-- DATEDIFF('unit', start_date, end_date): Calculate difference between dates
-- CURRENT_DATE: Today's date (no parentheses)
-- EXTRACT('unit' FROM date_col): Extract year, month, day, quarter, week, dayofweek, etc.
-- TO_DATE(string): Convert string to date
-
-TIME SERIES BEST PRACTICES:
-- First check column DATA_TYPE — if NUMBER/INT → use FLOOR division, not date functions
-- For "trends" on integer key: GROUP BY FLOOR(timekey / 100) AS year_month ORDER BY 1
-- For "trends" on date col: GROUP BY DATE_TRUNC('month', date_col)
-- For "this year" on integer key: WHERE FLOOR(timekey / 10000) = YEAR(CURRENT_DATE)
-- For "last N days" on integer key: WHERE TO_DATE(CAST(timekey AS VARCHAR), 'YYYYMMDD') >= DATEADD('day', -N, CURRENT_DATE)
-- Always alias date expressions: FLOOR(timekey / 10000) AS year
+{date_hints}
 
 ════════════════════════════════════════════════════════
-SNOWFLAKE SQL RULES
+RULE 3 — SNOWFLAKE SQL SYNTAX
 ════════════════════════════════════════════════════════
-- Use LIMIT N (NOT TOP N)
-- Column/table names are case-insensitive → use exact names from schema
-- Always alias tables: FROM CUSTOMERS c, FROM ORDERS o
-- Prefix column refs with alias when joins present: c.customer_id, o.order_date
-- GROUP BY all non-aggregated columns when using COUNT/SUM/AVG/MIN/MAX
-- Never SELECT * — always list explicit columns
-- Use ORDER BY col DESC LIMIT N for "top N"
-- For strings: ILIKE for case-insensitive, || for concat
-- For nulls: COALESCE(col, 0) or ISNULL(col, default_value)
-- Use explicit JOIN syntax (INNER JOIN, LEFT JOIN, etc.)
+- LIMIT N not TOP N
+- Always alias tables: FROM ORDERS o, FROM CUSTOMERS c
+- Prefix every column ref with its alias when joins are present
+- GROUP BY ALL non-aggregated SELECT expressions
+- Never SELECT * — list columns explicitly
+- Top-N: ORDER BY metric DESC LIMIT N
+- Strings: ILIKE (case-insensitive), || (concat)
+- Nulls: COALESCE(col, 0)
+- Every computed column MUST have an alias: COUNT(*) AS TOTAL_ORDERS
 
 ════════════════════════════════════════════════════════
-FOLLOW-UP QUERY HANDLING
+RULE 4 — CHART SELECTION
 ════════════════════════════════════════════════════════
-Last SQL: {last_sql if last_sql else "(none — first query)"}
+- percentage / share / proportion / breakdown / distribution → "donut"
+- trend / over time / by month / by year / monthly / yearly → "line"
+- category comparison → "bar"
+- single scalar result → "none"
 
-If new question modifies last query → edit ONLY that query
-If new topic → write fresh query
+════════════════════════════════════════════════════════
+RULE 5 — FOLLOW-UP HANDLING
+════════════════════════════════════════════════════════
+Previous SQL: {last_sql if last_sql else "(none)"}
+If the user refines the previous question → modify that SQL only.
+If it is a new topic → write a fresh query.
 
 ════════════════════════════════════════════════════════
-OUTPUT — RAW JSON ONLY. NO MARKDOWN. NO CODE FENCES.
+OUTPUT — RAW JSON ONLY, NO MARKDOWN, NO CODE FENCES
 ════════════════════════════════════════════════════════
-{{
-  "sql": "SELECT ... FROM ... WHERE ...",
-  "summary": "One sentence business insight in plain English (no SQL jargon)",
-  "chart": "bar|line|pie|donut|scatter|area|histogram|seaborn_bar|none|...",
-  "chart_x": "exact_column_name",
-  "chart_y": "exact_column_name",
-  "chart_title": "Short title (if chart != none)"
-}}
+{{"sql":"SELECT ...","summary":"One plain-English sentence","chart":"bar|line|donut|pie|scatter|area|none","chart_x":"col_alias","chart_y":"col_alias","chart_title":"Short title"}}
 """
 
-    user_message = f"""AVAILABLE TABLES AND COLUMNS (copy names EXACTLY):
+    user_message = f"""TABLES AND EXACT COLUMN NAMES (copy verbatim — no modifications):
 {compact_block}
 
-USER QUESTION: {question}
+QUESTION: {question}
 
-INSTRUCTIONS:
-1. Identify which table(s) best match the business intent
-2. Find the EXACT column names from the list above
-3. Write proper Snowflake SQL using ONLY those exact names
-4. For time-series queries: use DATE_TRUNC and DATEADD appropriately
-5. Always generate a descriptive chart title
-6. Output ONLY valid JSON with no explanation or markdown
+Steps:
+1. Pick the correct table(s) from the list.
+2. Copy the exact column names — do NOT rename, guess, or invent.
+3. For native DATE columns use them directly (no TO_DATE wrapping).
+4. For integer-encoded date columns, apply TO_DATE(LPAD(CAST(col AS VARCHAR),8,'0'),'FORMAT').
+5. For percentage/share questions set chart to "donut".
+6. For time-series questions set chart to "line" and include ORDER BY time col.
+7. Return ONLY valid JSON.
 """
 
-    def call_groq(extra_instruction: str = "") -> dict:
-        sys_content = system_prompt + ("\n\n" + extra_instruction if extra_instruction else "")
-        messages = []
+    def _call_groq(extra: str = "") -> dict:
+        sys_c = system_prompt + ("\n\n" + extra if extra else "")
+        msgs  = []
         for m in history[-6:]:
-            messages.append({
-                "role": m["role"],
-                "content": m["content"] if m["role"] == "user" else m.get("summary", ""),
-            })
-        messages.append({"role": "user", "content": user_message})
+            msgs.append({"role":m["role"],
+                         "content": m["content"] if m["role"]=="user" else m.get("summary","")})
+        msgs.append({"role":"user","content":user_message})
         client = Groq(api_key=GROQ_API_KEY)
-
-        max_retries = 3
-        for attempt in range(max_retries):
+        for attempt in range(3):
             try:
                 resp = client.chat.completions.create(
                     model=GROQ_MODEL,
-                    messages=[{"role": "system", "content": sys_content}] + messages,
-                    temperature=0.0,
-                    max_tokens=1024,
+                    messages=[{"role":"system","content":sys_c}] + msgs,
+                    temperature=0.0, max_tokens=1024,
                 )
                 raw = resp.choices[0].message.content.strip()
-                raw = _re.sub(r"^```[a-z]*\n?", "", raw).strip("`").strip()
-                json_match = _re.search(r'\{.*\}', raw, _re.DOTALL)
-                if json_match:
-                    raw = json_match.group(0)
-                if not raw:
-                    raise ValueError("Empty response from model")
+                raw = _re.sub(r"^```[a-z]*\n?","",raw).strip("`").strip()
+                jm  = _re.search(r'\{.*\}', raw, _re.DOTALL)
+                if jm: raw = jm.group(0)
+                if not raw: raise ValueError("Empty response")
                 return json.loads(raw)
             except Exception as e:
-                err_str = str(e).lower()
-                is_rate_limit = (
-                    "ratelimit" in err_str or
-                    "rate_limit" in err_str or
-                    "rate limit" in err_str or
-                    "429" in err_str or
-                    "too many" in err_str or
-                    "tokens per minute" in err_str or
-                    "requests per minute" in err_str
-                )
-                if is_rate_limit and attempt < max_retries - 1:
-                    wait_time = (attempt + 1) * 20
-                    st.toast(f"⏳ Rate limit reached — retrying in {wait_time}s… (attempt {attempt + 1}/{max_retries})", icon="⏳")
-                    time.sleep(wait_time)
-                    continue
-                elif is_rate_limit:
-                    raise RuntimeError(
-                        "⚠️ The AI service is currently rate-limited (too many requests). "
-                        "Please wait 30–60 seconds and try again."
-                    )
+                es = str(e).lower()
+                is_rl = any(k in es for k in ("ratelimit","rate_limit","rate limit","429","too many","tokens per minute","requests per minute"))
+                if is_rl and attempt < 2:
+                    wt = (attempt+1)*20
+                    st.toast(f"⏳ Rate limit — retrying in {wt}s…", icon="⏳")
+                    time.sleep(wt)
+                elif is_rl:
+                    raise RuntimeError("⚠️ AI service rate-limited. Wait 30–60 s and retry.")
                 else:
                     raise
 
-    try:
-        result = call_groq()
-    except RuntimeError as rate_err:
-        return {
-            "sql": "",
-            "summary": str(rate_err),
-            "chart": "none",
-            "chart_x": "",
-            "chart_y": "",
-            "chart_title": "",
-            "chart_color": None,
-            "title_color": None,
-        }
-    except Exception as e:
-        return {
-            "sql": "",
-            "summary": f"⚠️ Unexpected error while generating query: {e}",
-            "chart": "none",
-            "chart_x": "",
-            "chart_y": "",
-            "chart_title": "",
-            "chart_color": None,
-            "title_color": None,
-        }
+    _EMPTY = {"sql":"","chart":"none","chart_x":"","chart_y":"","chart_title":"",
+              "chart_color":None,"title_color":None,"x_label":None,"y_label":None}
 
-    sql = result.get("sql", "").strip()
+    try:
+        result = _call_groq()
+    except RuntimeError as re_err:
+        return {**_EMPTY, "summary": str(re_err)}
+    except Exception as ex:
+        return {**_EMPTY, "summary": f"⚠️ Error generating query: {ex}"}
+
+    sql = result.get("sql","").strip()
+
+    # Post-process: force donut for percentage queries
+    if is_percentage_query(question) and result.get("chart","none") not in ("pie","donut"):
+        result["chart"] = "donut"
 
     extracted_color = extract_color_from_question(question)
     result["chart_color"] = extracted_color or result.get("chart_color") or None
     result["title_color"] = None
+    result.setdefault("x_label", None)
+    result.setdefault("y_label", None)
 
+    # Validate identifiers
     is_valid, bad_cols = validate_sql_against_whitelist(sql, wl)
     if not is_valid and sql:
-        bad_list = ", ".join(bad_cols)
-        correction = f"""
-⛔ VALIDATION FAILED - COLUMN/TABLE NAMES DO NOT MATCH SCHEMA:
-Your SQL referenced: [{bad_list}]
-
-These identifiers are NOT in the schema. You MUST:
-1. Check the numbered column list above
-2. Find the EXACT correct name (copy character-by-character)
-3. Rewrite query using ONLY schema names
-4. If no valid columns → return sql as empty string ""
-
-DO NOT GUESS. Use EXACT names from the numbered list only.
-"""
+        correction = (
+            f"⛔ VALIDATION FAILED — these identifiers are NOT in the schema: {bad_cols}\n\n"
+            "You MUST:\n"
+            "1. Look at the numbered schema list provided.\n"
+            "2. Copy the EXACT correct identifier character-by-character.\n"
+            "3. Rewrite the query using ONLY identifiers from that list.\n"
+            "4. If no valid column exists → set sql to \"\" and explain.\n"
+            "DO NOT guess. DO NOT use similar-looking names."
+        )
         try:
-            result = call_groq(extra_instruction=correction)
+            result = _call_groq(extra=correction)
             result["chart_color"] = extracted_color
             result["title_color"] = None
-            sql = result.get("sql", "").strip()
-            is_valid2, bad_cols2 = validate_sql_against_whitelist(sql, wl)
-            if not is_valid2 and sql:
+            result.setdefault("x_label", None)
+            result.setdefault("y_label", None)
+            sql = result.get("sql","").strip()
+            ok2, bad2 = validate_sql_against_whitelist(sql, wl)
+            if not ok2 and sql:
                 result["sql"]     = ""
                 result["summary"] = (
-                    f"I couldn't generate a valid query — the columns "
-                    f"({', '.join(bad_cols2)}) don't exist in the schema. "
-                    "Please rephrase your question or check the sidebar schema."
+                    f"Couldn't generate a valid query — columns ({', '.join(bad2)}) "
+                    "don't exist in the schema. Please rephrase or check the sidebar schema."
                 )
                 result["chart"] = "none"
-        except RuntimeError as rate_err:
-            result["sql"]     = ""
-            result["summary"] = str(rate_err)
-            result["chart"]   = "none"
+        except RuntimeError as re_err:
+            result["sql"]=""; result["summary"]=str(re_err); result["chart"]="none"
         except Exception:
-            result["sql"]     = ""
-            result["summary"] = "Query generation failed after validation. Please try rephrasing."
-            result["chart"]   = "none"
+            result["sql"]=""; result["summary"]="Query generation failed. Please try rephrasing."; result["chart"]="none"
 
     return result
 
 # ─────────────────────────────────────────────────────────────────
-#  COLUMN RESOLVER
+#  CHART COLUMN RESOLVER
 # ─────────────────────────────────────────────────────────────────
 def resolve_chart_col(col: str, df_columns: list) -> str:
-    if not col:
-        return col
-    if col in df_columns:
-        return col
-    col_lower = col.lower()
+    if not col: return col
+    if col in df_columns: return col
     for c in df_columns:
-        if c.lower() == col_lower:
-            return c
-    def norm(s):
-        return _re.sub(r"[\s_]+", "", s.lower())
-    col_norm = norm(col)
+        if c.lower() == col.lower(): return c
+    norm = lambda s: _re.sub(r"[\s_]+","",s.lower())
     for c in df_columns:
-        if norm(c) == col_norm:
-            return c
+        if norm(c) == norm(col): return c
     for c in df_columns:
-        if col_lower in c.lower() or c.lower() in col_lower:
-            return c
+        if col.lower() in c.lower() or c.lower() in col.lower(): return c
     return col
 
 # ─────────────────────────────────────────────────────────────────
 #  CHART RENDERER
 # ─────────────────────────────────────────────────────────────────
-def _effective_title_color(chart_color: str | None, title_color: str | None) -> str:
-    if title_color:
-        return title_color
-    return chart_color if chart_color else DEFAULT_CHART_COLOR
+def _eff_title_color(chart_color, title_color) -> str:
+    return title_color or chart_color or DEFAULT_CHART_COLOR
 
-def render_chart(
-    df: pd.DataFrame,
-    chart_type: str,
-    x: str,
-    y: str,
-    chart_color: str | None = None,
-    chart_title: str = "",
-    title_color: str | None = None,
-):
-    if chart_type == "none" or not x:
-        return
-
-    single_color    = chart_color if chart_color else DEFAULT_CHART_COLOR
-    seq_colors      = [chart_color] + DEFAULT_BLUE_SEQUENCE if chart_color else DEFAULT_BLUE_SEQUENCE
-    eff_title_color = _effective_title_color(chart_color, title_color)
+def render_chart(df, chart_type, x, y,
+                 chart_color=None, chart_title="", title_color=None,
+                 x_label=None, y_label=None):
+    if chart_type == "none" or not x: return
+    sc  = chart_color or DEFAULT_CHART_COLOR
+    seq = [chart_color]+DEFAULT_BLUE_SEQUENCE if chart_color else DEFAULT_BLUE_SEQUENCE
+    etc = _eff_title_color(chart_color, title_color)
 
     if chart_type.startswith("seaborn_"):
-        _render_seaborn(df, chart_type, x, y, single_color, chart_title, eff_title_color)
-        return
-
+        _render_seaborn(df,chart_type,x,y,sc,chart_title,etc,x_label,y_label); return
     if chart_type.startswith("matplotlib_"):
-        _render_matplotlib(df, chart_type, x, y, single_color, seq_colors, chart_title, eff_title_color)
-        return
+        _render_matplotlib(df,chart_type,x,y,sc,seq,chart_title,etc,x_label,y_label); return
 
-    if y and y not in df.columns and chart_type not in ["histogram", "pie", "donut"]:
-        st.warning(f"Chart column '{y}' not found in results.")
-        return
+    if y and y not in df.columns and chart_type not in ("histogram","pie","donut"):
+        st.warning(f"Chart column '{y}' not found in results."); return
     if x not in df.columns:
-        st.warning(f"Chart column '{x}' not found in results.")
-        return
+        st.warning(f"Chart column '{x}' not found in results."); return
 
     try:
-        # ── Fix: treat small-integer X columns (years, months, codes) as categories ──
+        # Treat small/year-range integers as categorical on X axis
         if x in df.columns and pd.api.types.is_numeric_dtype(df[x]):
-            unique_vals = df[x].dropna().unique()
-            if len(unique_vals) <= 50 or (df[x].max() <= 9999 and df[x].min() >= 1000):
-                df = df.copy()
-                df[x] = df[x].astype(int).astype(str)
-        # ── Fix: treat small-integer X columns (years, months, codes) as categories ──
-        if x in df.columns and pd.api.types.is_numeric_dtype(df[x]):
-            unique_vals = df[x].dropna().unique()
-            if len(unique_vals) <= 50 or (df[x].max() <= 9999 and df[x].min() >= 1000):
-                df = df.copy()
-                df[x] = df[x].astype(int).astype(str)
+            uv = df[x].dropna().unique()
+            if len(uv) <= 50 or (df[x].max() <= 9999 and df[x].min() >= 1000):
+                df = df.copy(); df[x] = df[x].astype(int).astype(str)
 
-        common_kwargs = dict(title=chart_title) if chart_title else {}
-        if chart_type == "bar":
-            fig = px.bar(df, x=x, y=y, color_discrete_sequence=[single_color], **common_kwargs)
-        elif chart_type == "line":
-            fig = px.line(df, x=x, y=y, markers=True, color_discrete_sequence=[single_color], **common_kwargs)
-        elif chart_type == "area":
-            fig = px.area(df, x=x, y=y, color_discrete_sequence=[single_color], **common_kwargs)
-        elif chart_type == "scatter":
-            fig = px.scatter(df, x=x, y=y, color_discrete_sequence=[single_color], **common_kwargs)
-        elif chart_type == "pie":
-            fig = px.pie(df, names=x, values=y, color_discrete_sequence=seq_colors, **common_kwargs)
-        elif chart_type == "donut":
-            fig = px.pie(df, names=x, values=y, hole=0.45, color_discrete_sequence=seq_colors, **common_kwargs)
-        elif chart_type == "histogram":
-            fig = px.histogram(df, x=x, color_discrete_sequence=[single_color], **common_kwargs)
-        elif chart_type == "box":
-            fig = px.box(df, x=x, y=y, color_discrete_sequence=[single_color], **common_kwargs)
-        elif chart_type == "funnel":
-            fig = px.funnel(df, x=y, y=x, color_discrete_sequence=[single_color], **common_kwargs)
-        elif chart_type == "treemap":
-            fig = px.treemap(df, path=[x], values=y, color_discrete_sequence=seq_colors, **common_kwargs)
-        elif chart_type == "sunburst":
-            fig = px.sunburst(df, path=[x], values=y, color_discrete_sequence=seq_colors, **common_kwargs)
-        else:
-            st.info(f"Chart type '{chart_type}' is not supported.")
-            return
+        eff_xl = x_label or x
+        eff_yl = y_label or (y or "")
+        lbl    = {x: eff_xl, y: eff_yl} if y else {x: eff_xl}
+        ck     = dict(title=chart_title) if chart_title else {}
+
+        if   chart_type == "bar":       fig = px.bar(df,x=x,y=y,color_discrete_sequence=[sc],labels=lbl,**ck)
+        elif chart_type == "line":      fig = px.line(df,x=x,y=y,markers=True,color_discrete_sequence=[sc],labels=lbl,**ck)
+        elif chart_type == "area":      fig = px.area(df,x=x,y=y,color_discrete_sequence=[sc],labels=lbl,**ck)
+        elif chart_type == "scatter":   fig = px.scatter(df,x=x,y=y,color_discrete_sequence=[sc],labels=lbl,**ck)
+        elif chart_type == "pie":       fig = px.pie(df,names=x,values=y,color_discrete_sequence=seq,**ck)
+        elif chart_type == "donut":     fig = px.pie(df,names=x,values=y,hole=0.45,color_discrete_sequence=seq,**ck)
+        elif chart_type == "histogram": fig = px.histogram(df,x=x,color_discrete_sequence=[sc],labels={x:eff_xl},**ck)
+        elif chart_type == "box":       fig = px.box(df,x=x,y=y,color_discrete_sequence=[sc],labels=lbl,**ck)
+        elif chart_type == "funnel":    fig = px.funnel(df,x=y,y=x,color_discrete_sequence=[sc],labels=lbl,**ck)
+        elif chart_type == "treemap":   fig = px.treemap(df,path=[x],values=y,color_discrete_sequence=seq,**ck)
+        elif chart_type == "sunburst":  fig = px.sunburst(df,path=[x],values=y,color_discrete_sequence=seq,**ck)
+        else: st.info(f"Chart type '{chart_type}' is not supported."); return
 
         fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             font=dict(family="Poppins"),
-            margin=dict(t=50 if chart_title else 30, b=30, l=10, r=10),
+            margin=dict(t=50 if chart_title else 30,b=30,l=10,r=10),
             xaxis=dict(showgrid=False),
-            yaxis=dict(showgrid=True, gridcolor="rgba(200,200,200,0.2)"),
-            title=dict(
-                text=chart_title,
-                font=dict(family="Poppins", size=15, color=eff_title_color),
-                x=0.02,
-            ) if chart_title else {},
+            yaxis=dict(showgrid=True,gridcolor="rgba(200,200,200,0.2)"),
+            title=dict(text=chart_title,font=dict(family="Poppins",size=15,color=etc),x=0.02) if chart_title else {},
         )
         st.plotly_chart(fig, use_container_width=True)
     except Exception as e:
         st.warning(f"Could not render {chart_type} chart: {e}")
 
 
-def _render_seaborn(df, chart_type, x, y, color, title, title_color):
+def _render_seaborn(df,chart_type,x,y,color,title,title_color,x_label=None,y_label=None):
     try:
         sns.set_theme(style="darkgrid")
-        fig, ax = plt.subplots(figsize=(10, 5))
-        fig.patch.set_alpha(0.0)
-        ax.patch.set_alpha(0.0)
-
+        fig,ax = plt.subplots(figsize=(10,5))
+        fig.patch.set_alpha(0.0); ax.patch.set_alpha(0.0)
         if chart_type == "seaborn_bar":
-            if x in df.columns and y in df.columns:
-                sns.barplot(data=df, x=x, y=y, color=color, ax=ax)
-            else:
-                sns.countplot(data=df, x=x, color=color, ax=ax)
-        elif chart_type == "seaborn_line":
-            sns.lineplot(data=df, x=x, y=y, color=color, marker="o", ax=ax)
+            if x in df.columns and y in df.columns: sns.barplot(data=df,x=x,y=y,color=color,ax=ax)
+            else: sns.countplot(data=df,x=x,color=color,ax=ax)
+        elif chart_type == "seaborn_line":   sns.lineplot(data=df,x=x,y=y,color=color,marker="o",ax=ax)
         elif chart_type == "seaborn_heatmap":
-            numeric_df = df.select_dtypes(include="number")
-            if numeric_df.shape[1] >= 2:
-                corr = numeric_df.corr()
-                sns.heatmap(corr, annot=True, fmt=".2f", cmap="Blues", ax=ax,
-                            linewidths=0.5, linecolor="rgba(200,200,200,0.2)")
-            else:
-                sns.barplot(data=df, x=x, y=y, color=color, ax=ax)
+            nd = df.select_dtypes(include="number")
+            if nd.shape[1] >= 2: sns.heatmap(nd.corr(),annot=True,fmt=".2f",cmap="Blues",ax=ax)
+            else: sns.barplot(data=df,x=x,y=y,color=color,ax=ax)
         elif chart_type == "seaborn_violin":
-            if y in df.columns:
-                sns.violinplot(data=df, x=x, y=y, color=color, ax=ax)
-            else:
-                sns.violinplot(data=df, y=x, color=color, ax=ax)
+            if y in df.columns: sns.violinplot(data=df,x=x,y=y,color=color,ax=ax)
+            else: sns.violinplot(data=df,y=x,color=color,ax=ax)
         elif chart_type == "seaborn_box":
-            if y in df.columns:
-                sns.boxplot(data=df, x=x, y=y, color=color, ax=ax)
-            else:
-                sns.boxplot(data=df, y=x, color=color, ax=ax)
-        else:
-            sns.barplot(data=df, x=x, y=y, color=color, ax=ax)
-
-        if title:
-            ax.set_title(title, fontsize=14, color=title_color, fontweight="bold", pad=12)
-
-        ax.tick_params(colors="gray", labelsize=9)
-        ax.xaxis.label.set_color("gray")
-        ax.yaxis.label.set_color("gray")
-        for spine in ax.spines.values():
-            spine.set_edgecolor("rgba(100,100,100,0.3)")
-
+            if y in df.columns: sns.boxplot(data=df,x=x,y=y,color=color,ax=ax)
+            else: sns.boxplot(data=df,y=x,color=color,ax=ax)
+        else: sns.barplot(data=df,x=x,y=y,color=color,ax=ax)
+        if title: ax.set_title(title,fontsize=14,color=title_color,fontweight="bold",pad=12)
+        if x_label: ax.set_xlabel(x_label,color="gray",fontsize=9)
+        if y_label: ax.set_ylabel(y_label,color="gray",fontsize=9)
+        ax.tick_params(colors="gray",labelsize=9)
+        for sp in ax.spines.values(): sp.set_edgecolor("rgba(100,100,100,0.3)")
         plt.tight_layout()
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", transparent=True)
-        buf.seek(0)
-        st.image(buf, use_container_width=True)
-        plt.close(fig)
-    except Exception as e:
-        st.warning(f"Could not render seaborn chart: {e}")
+        buf = io.BytesIO(); fig.savefig(buf,format="png",dpi=150,bbox_inches="tight",transparent=True)
+        buf.seek(0); st.image(buf,use_container_width=True); plt.close(fig)
+    except Exception as e: st.warning(f"Seaborn chart error: {e}")
 
 
-def _render_matplotlib(df, chart_type, x, y, color, seq_colors, title, title_color):
+def _render_matplotlib(df,chart_type,x,y,color,seq_colors,title,title_color,x_label=None,y_label=None):
     try:
-        fig, ax = plt.subplots(figsize=(10, 5))
-        fig.patch.set_alpha(0.0)
-        ax.patch.set_alpha(0.0)
-
+        fig,ax = plt.subplots(figsize=(10,5))
+        fig.patch.set_alpha(0.0); ax.patch.set_alpha(0.0)
         if chart_type == "matplotlib_bar":
-            x_vals = df[x].astype(str).tolist()
-            y_vals = df[y].tolist() if y in df.columns else [0] * len(x_vals)
-            ax.bar(x_vals, y_vals, color=color, width=0.6, edgecolor="none")
-            ax.set_xlabel(x, color="gray", fontsize=9)
-            ax.set_ylabel(y if y else "", color="gray", fontsize=9)
-            plt.xticks(rotation=30, ha="right", fontsize=8, color="gray")
-            plt.yticks(fontsize=8, color="gray")
+            xv = df[x].astype(str).tolist(); yv = df[y].tolist() if y in df.columns else [0]*len(xv)
+            ax.bar(xv,yv,color=color,width=0.6,edgecolor="none")
+            ax.set_xlabel(x_label or x,color="gray",fontsize=9)
+            ax.set_ylabel(y_label or (y or ""),color="gray",fontsize=9)
+            plt.xticks(rotation=30,ha="right",fontsize=8,color="gray"); plt.yticks(fontsize=8,color="gray")
         elif chart_type == "matplotlib_line":
-            x_vals = df[x].astype(str).tolist()
-            y_vals = df[y].tolist() if y in df.columns else [0] * len(x_vals)
-            ax.plot(x_vals, y_vals, color=color, marker="o", linewidth=2, markersize=5)
-            ax.set_xlabel(x, color="gray", fontsize=9)
-            ax.set_ylabel(y if y else "", color="gray", fontsize=9)
-            plt.xticks(rotation=30, ha="right", fontsize=8, color="gray")
-            plt.yticks(fontsize=8, color="gray")
+            xv = df[x].astype(str).tolist(); yv = df[y].tolist() if y in df.columns else [0]*len(xv)
+            ax.plot(xv,yv,color=color,marker="o",linewidth=2,markersize=5)
+            ax.set_xlabel(x_label or x,color="gray",fontsize=9)
+            ax.set_ylabel(y_label or (y or ""),color="gray",fontsize=9)
+            plt.xticks(rotation=30,ha="right",fontsize=8,color="gray"); plt.yticks(fontsize=8,color="gray")
         elif chart_type == "matplotlib_pie":
-            labels = df[x].astype(str).tolist()
-            vals   = df[y].tolist() if y in df.columns else [1] * len(labels)
-            wedge_colors = (seq_colors * ((len(labels) // len(seq_colors)) + 1))[:len(labels)]
-            ax.pie(vals, labels=labels, colors=wedge_colors,
-                   autopct="%1.1f%%", startangle=140,
-                   textprops={"color": "gray", "fontsize": 8})
-            ax.axis("equal")
+            lb = df[x].astype(str).tolist(); vl = df[y].tolist() if y in df.columns else [1]*len(lb)
+            wc = (seq_colors*((len(lb)//len(seq_colors))+1))[:len(lb)]
+            ax.pie(vl,labels=lb,colors=wc,autopct="%1.1f%%",startangle=140,
+                   textprops={"color":"gray","fontsize":8}); ax.axis("equal")
         elif chart_type == "matplotlib_hist":
-            vals = df[x].dropna().tolist()
-            ax.hist(vals, color=color, edgecolor="none", bins=20)
-            ax.set_xlabel(x, color="gray", fontsize=9)
-            ax.set_ylabel("Frequency", color="gray", fontsize=9)
-            plt.xticks(fontsize=8, color="gray")
-            plt.yticks(fontsize=8, color="gray")
+            ax.hist(df[x].dropna().tolist(),color=color,edgecolor="none",bins=20)
+            ax.set_xlabel(x_label or x,color="gray",fontsize=9)
+            ax.set_ylabel(y_label or "Frequency",color="gray",fontsize=9)
+            plt.xticks(fontsize=8,color="gray"); plt.yticks(fontsize=8,color="gray")
         else:
-            x_vals = df[x].astype(str).tolist()
-            y_vals = df[y].tolist() if y in df.columns else [0] * len(x_vals)
-            ax.bar(x_vals, y_vals, color=color, width=0.6, edgecolor="none")
-
-        if title:
-            ax.set_title(title, fontsize=14, color=title_color, fontweight="bold", pad=12)
-
+            xv = df[x].astype(str).tolist(); yv = df[y].tolist() if y in df.columns else [0]*len(xv)
+            ax.bar(xv,yv,color=color,width=0.6,edgecolor="none")
+        if title: ax.set_title(title,fontsize=14,color=title_color,fontweight="bold",pad=12)
         ax.tick_params(colors="gray")
-        for spine in ax.spines.values():
-            spine.set_edgecolor("rgba(100,100,100,0.3)")
-        ax.grid(axis="y", color="rgba(200,200,200,0.15)", linestyle="--", linewidth=0.5)
-
+        for sp in ax.spines.values(): sp.set_edgecolor("rgba(100,100,100,0.3)")
+        ax.grid(axis="y",color="rgba(200,200,200,0.15)",linestyle="--",linewidth=0.5)
         plt.tight_layout()
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", transparent=True)
-        buf.seek(0)
-        st.image(buf, use_container_width=True)
-        plt.close(fig)
-    except Exception as e:
-        st.warning(f"Could not render matplotlib chart: {e}")
+        buf = io.BytesIO(); fig.savefig(buf,format="png",dpi=150,bbox_inches="tight",transparent=True)
+        buf.seek(0); st.image(buf,use_container_width=True); plt.close(fig)
+    except Exception as e: st.warning(f"Matplotlib chart error: {e}")
 
 # ─────────────────────────────────────────────────────────────────
 #  SESSION STATE
@@ -1362,326 +1180,171 @@ if "selected_db" not in st.session_state:
 #  SIDEBAR
 # ─────────────────────────────────────────────────────────────────
 with st.sidebar:
-    try:
-        _active_theme = st.context.theme.get("base", "light")
+    try: _active_theme = st.context.theme.get("base","light")
     except Exception:
         try:
             import tomllib
         except ImportError:
             import tomli as tomllib
         try:
-            _cfg_path = pathlib.Path(__file__).parent / ".streamlit" / "config.toml"
-            _active_theme = tomllib.loads(_cfg_path.read_text()).get("theme", {}).get("base", "light")
+            _cp = pathlib.Path(__file__).parent/".streamlit"/"config.toml"
+            _active_theme = tomllib.loads(_cp.read_text()).get("theme",{}).get("base","light")
         except Exception:
             _active_theme = "light"
-
     _is_dark = (_active_theme == "dark")
 
-    LOGO_LIGHT_FILE = "techwish_black_transparent"
-    LOGO_DARK_FILE  = "Techwish-Logo-white (3)"
-
-    light_src = img_to_b64(LOGO_LIGHT_FILE)
-    dark_src  = img_to_b64(LOGO_DARK_FILE)
+    light_src = img_to_b64("techwish_black_transparent")
+    dark_src  = img_to_b64("Techwish-Logo-white (3)")
     logo_src  = (dark_src or light_src) if _is_dark else (light_src or dark_src)
 
     if logo_src:
         st.markdown(
-            f'<div class="logo-row">'
-            f'<img src="{logo_src}" style="max-width:150px; height:auto;" />'
-            f'<span class="ai-badge">AI</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+            f'<div class="logo-row"><img src="{logo_src}" style="max-width:150px;height:auto;"/>'
+            f'<span class="ai-badge">AI</span></div>', unsafe_allow_html=True)
     else:
         st.markdown(
-            '<div class="logo-row">'
-            '<span style="font-family:Poppins,sans-serif;font-weight:800;color:#1565C0;font-size:1.2rem;">Techwish</span>'
-            '<span class="ai-badge">AI</span>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
+            '<div class="logo-row"><span style="font-family:Poppins,sans-serif;font-weight:800;'
+            'color:#1565C0;font-size:1.2rem;">Techwish</span>'
+            '<span class="ai-badge">AI</span></div>', unsafe_allow_html=True)
 
-    st.markdown(
-        '<p style="color:gray; font-size:0.8rem; margin-top:2px; font-family:Poppins,sans-serif;">Ask anything about your data</p>',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<p style="color:gray;font-size:0.8rem;margin-top:2px;font-family:Poppins,sans-serif;">'
+                'Ask anything about your data</p>', unsafe_allow_html=True)
+    st.markdown('<hr style="border:none;height:1px;background:rgba(128,128,128,0.25);margin:0;">', unsafe_allow_html=True)
 
-    st.markdown("""
-<hr style="border: none; height: 1px; background: rgba(128,128,128,0.25); margin-top: 0px; margin-bottom: 0px;">
-""", unsafe_allow_html=True)
     st.markdown("**❄️ Select Database**")
     available_dbs = list_databases()
-
     if not available_dbs:
         st.error("No databases found or Snowflake connection failed.")
         selected_db = None
     else:
-        selected_db = st.selectbox(
-            label="Database",
-            options=available_dbs,
-            index=0,
-            label_visibility="collapsed",
-        )
+        selected_db = st.selectbox("Database", options=available_dbs, index=0, label_visibility="collapsed")
         if selected_db != st.session_state.selected_db:
             st.session_state.messages = []
             st.session_state.selected_db = selected_db
 
     st.divider()
-
     if selected_db:
         with st.expander("📋 View Database Schema", expanded=False):
-            schema_text = load_schema(selected_db)
-            st.code(schema_text if schema_text else "Could not load schema.", language="text")
+            st.code(load_schema(selected_db) or "Could not load schema.", language="text")
 
     st.divider()
-
     if st.button("🗑️ Clear Chat", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
     st.divider()
-
     if selected_db:
-        st.markdown(
-            '<p style="font-size:0.8rem; font-family:Poppins,sans-serif; color:gray; margin-bottom:6px;">💡 <b>Try asking:</b></p>',
-            unsafe_allow_html=True,
-        )
-        questions = get_sample_questions(selected_db)
-        for q in questions:
+        st.markdown('<p style="font-size:0.8rem;font-family:Poppins,sans-serif;color:gray;margin-bottom:6px;">'
+                    '💡 <b>Try asking:</b></p>', unsafe_allow_html=True)
+        for q in get_sample_questions(selected_db):
             if st.button(q, key=f"sq_{q}", use_container_width=True):
                 st.session_state["_inject_question"] = q
                 st.rerun()
     else:
-        st.markdown(
-            '<p style="color:gray; font-size:0.8rem;">Select a database to see suggested questions.</p>',
-            unsafe_allow_html=True,
-        )
+        st.markdown('<p style="color:gray;font-size:0.8rem;">Select a database to see suggested questions.</p>',
+                    unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────
-#  GUARD — no database selected
+#  GUARD
 # ─────────────────────────────────────────────────────────────────
 if not selected_db:
     st.info("Please select a database from the sidebar to get started.")
     st.stop()
 
 # ─────────────────────────────────────────────────────────────────
-#  LOAD AI ICON
-# ─────────────────────────────────────────────────────────────────
-_ai_icon_src = img_to_b64("ai_icon")
-
-# ─────────────────────────────────────────────────────────────────
 #  HEADER
 # ─────────────────────────────────────────────────────────────────
-connected_badge = (
-    '<span style="display:inline-flex; align-items:center; gap:5px; '
-    'font-size:0.75rem; font-family:Poppins,sans-serif; color:#2E7D32; font-weight:500;">'
-    '<span style="display:inline-block; width:8px; height:8px; border-radius:50%; '
-    'background:#2E7D32;"></span>Connected</span>'
-) if selected_db else ''
+_ai_icon_src = img_to_b64("ai_icon")
+_db_icon_html = (
+    f'<img src="{_ai_icon_src}" style="width:36px;height:36px;object-fit:contain;border-radius:6px;flex-shrink:0;"/>'
+    if _ai_icon_src else '<span style="font-size:1.6rem;line-height:1;">📊</span>'
+)
+_badge = (
+    '<span style="display:inline-flex;align-items:center;gap:5px;font-size:0.75rem;'
+    'font-family:Poppins,sans-serif;color:#2E7D32;font-weight:500;">'
+    '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#2E7D32;"></span>'
+    'Connected</span>'
+) if selected_db else ""
 
-if _ai_icon_src:
-    _db_icon_html = (
-        f'<img src="{_ai_icon_src}" '
-        f'style="width:36px; height:36px; object-fit:contain; border-radius:6px; flex-shrink:0;" />'
-    )
-else:
-    _db_icon_html = '<span style="font-size:1.6rem; line-height:1;">📊</span>'
-
-components.html("""
-<script>
-(function() {
-  function alignDivider() {
-    const mainBlock = window.parent.document.querySelector('[data-testid="stAppViewBlockContainer"]');
-    const divider   = window.parent.document.getElementById('tw-top-divider');
-    if (!mainBlock || !divider) return;
-    const rect  = mainBlock.getBoundingClientRect();
-    const leftPx = rect.left;
-    divider.style.marginLeft = `-${leftPx}px`;
-    divider.style.width      = `calc(100% + ${leftPx}px)`;
+components.html("""<script>
+(function(){
+  function align(){
+    const mb=window.parent.document.querySelector('[data-testid="stAppViewBlockContainer"]');
+    const dv=window.parent.document.getElementById('tw-top-divider');
+    if(!mb||!dv)return;
+    const r=mb.getBoundingClientRect();
+    dv.style.marginLeft=`-${r.left}px`;dv.style.width=`calc(100% + ${r.left}px)`;
   }
-  setTimeout(alignDivider, 200);
-  window.addEventListener('resize', alignDivider);
+  setTimeout(align,200);window.addEventListener('resize',align);
 })();
-</script>
-""", height=41, scrolling=False)
+</script>""", height=41, scrolling=False)
 
-# Header block — padding-left matches Streamlit's default main-block indent
-# (Streamlit uses ~4rem / 64px left padding in wide-layout; we mirror that
-#  so the icon+title visually lines up with the chat message bubbles below.)
 st.markdown(f"""
-<div style="padding: 0.5rem 2rem 0 4rem;">
-    <div style="display:flex; align-items:center; gap:10px; margin-bottom:0.5rem;">
-        {_db_icon_html}
-        <h1 style="font-family:Poppins,sans-serif; font-weight:800; font-size:1.6rem;
-                   margin:0; color:#1565C0;">{selected_db or "Analytics"}</h1>
-        {connected_badge}
-        <span style="color:gray; font-size:0.9rem; font-family:Poppins,sans-serif;">
-            | Powered by Techwish AI
-        </span>
-    </div>
+<div style="padding:0.5rem 2rem 0 4rem;">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:0.5rem;">
+    {_db_icon_html}
+    <h1 style="font-family:Poppins,sans-serif;font-weight:800;font-size:1.6rem;margin:0;color:#1565C0;">
+      {selected_db or "Analytics"}</h1>
+    {_badge}
+    <span style="color:gray;font-size:0.9rem;font-family:Poppins,sans-serif;">| Powered by Techwish AI</span>
+  </div>
 </div>
-<hr id="tw-top-divider" style="
-    border: none;
-    height: 1px;
-    background: rgba(128,128,128,0.25);
-    margin: 0.5rem 0 1rem 0;
-    display: block;
-    position: relative;
-    width: 100%;
-"/>
+<hr id="tw-top-divider" style="border:none;height:1px;background:rgba(128,128,128,0.25);
+  margin:0.5rem 0 1rem 0;display:block;position:relative;width:100%;"/>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────
-#  VOICE ASSISTANT — Cloud-compatible
-#  Renders entirely inside the iframe (no window.parent DOM write).
-#  Uses postMessage to send the transcript to the parent, where a
-#  second listener fills the Streamlit chat textarea.
-#  Mic icon is blue (#1565C0); recording state pulses red.
+#  VOICE ASSISTANT
 # ─────────────────────────────────────────────────────────────────
-VOICE_COMPONENT_HTML = """
-<script>
-(function () {
-  const targetDoc = window.parent ? window.parent.document : document;
-
-const existing = targetDoc.getElementById('tw-mic-btn');
-if (existing) existing.remove();
-const existingToast = targetDoc.getElementById('tw-voice-toast');
-if (existingToast) existingToast.remove();
-
-  const style = targetDoc.createElement('style');
-  style.textContent = `
-    #tw-mic-btn {
-      position: fixed;
-      bottom: 65px;
-      right: 128px;
-      width: 40px;
-      height: 40px;
-      border-radius: 49%;
-      border: none;
-      cursor: pointer;
-      background: transparent;
-      color: #1565C0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.2s;
-      padding: 0;
-      outline: none;
-      z-index: 99999;
-      flex-shrink: 0;
-    }
-    #tw-mic-btn:hover { color: #D22630; background: rgba(255,255,255,0.1); }
-    #tw-mic-btn.active { color: #E53935; animation: tw-pulse 1s infinite; }
-    #tw-mic-btn svg { width: 20px; height: 20px; }
-    @keyframes tw-pulse {
-      0%   { opacity: 1; }
-      50%  { opacity: 0.4; }
-      100% { opacity: 1; }
-    }
-    #tw-voice-toast {
-      position: fixed;
-      bottom: 60px;
-      right: 52px;
-      z-index: 99999;
-      background: rgba(20,20,20,0.92);
-      color: #fff;
-      font-family: 'Poppins', sans-serif;
-      font-size: 0.75rem;
-      padding: 8px 12px;
-      border-radius: 6px;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.3s;
-      white-space: nowrap;
-    }
-    #tw-voice-toast.show { opacity: 1; }
-  `;
-  targetDoc.head.appendChild(style);
-
-  const MIC_ICON = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v6a2 2 0 1 0 4 0V5a2 2 0 0 0-2-2z"/><path d="M19 11a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 0 0-2 0 7 7 0 0 0 6 6.93V20H9a1 1 0 0 0 0 2h6a1 1 0 0 0 0-2h-2v-2.07A7 7 0 0 0 19 11z"/></svg>`;
-  const STOP_ICON = `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>`;
-
-  const btn = targetDoc.createElement('button');
-  btn.id = 'tw-mic-btn';
-  btn.title = 'Click to speak your question';
-  btn.innerHTML = MIC_ICON;
-  targetDoc.body.appendChild(btn);
-
-  const toast = targetDoc.createElement('div');
-  toast.id = 'tw-voice-toast';
-  targetDoc.body.appendChild(toast);
-
-  const SpeechRecognition =
-    window.parent.SpeechRecognition || window.parent.webkitSpeechRecognition ||
-    window.SpeechRecognition || window.webkitSpeechRecognition;
-
-  if (!SpeechRecognition) {
-    btn.title = 'Voice input not supported (try Chrome)';
-    btn.style.opacity = '0.35';
-    btn.style.cursor  = 'not-allowed';
-    btn.onclick = () => showToast('⚠️ Voice not supported — use Chrome/Edge', 3000);
-    return;
-  }
-
-  const recognition = new SpeechRecognition();
-  recognition.lang = 'en-US';
-  recognition.interimResults = false;
-  recognition.maxAlternatives = 1;
-  recognition.continuous = false;
-
-  let isListening = false;
-
-  function showToast(msg, duration) {
-    toast.textContent = msg;
-    toast.classList.add('show');
-    clearTimeout(toast._timer);
-    toast._timer = setTimeout(() => toast.classList.remove('show'), duration || 2500);
-  }
-
-  function startListening() {
-    recognition.start();
-    isListening = true;
-    btn.classList.add('active');
-    btn.innerHTML = STOP_ICON;
-    btn.title = 'Listening… click to stop';
-    showToast('🎙️ Listening…', 60000);
-  }
-
-  function stopListening() { recognition.stop(); }
-
-  btn.addEventListener('click', () => { if (isListening) stopListening(); else startListening(); });
-
-  recognition.onend = () => {
-    isListening = false;
-    btn.classList.remove('active');
-    btn.innerHTML = MIC_ICON;
-    btn.title = 'Click to speak your question';
-    toast.classList.remove('show');
-  };
-
-  recognition.onerror = (e) => {
-    isListening = false;
-    btn.classList.remove('active');
-    btn.innerHTML = MIC_ICON;
-    const msgs = { 'not-allowed':'🚫 Permission denied','no-speech':'🔇 No speech detected','audio-capture':'🎙️ No microphone','network':'🌐 Network error' };
-    showToast(msgs[e.error] || `⚠️ ${e.error}`, 3500);
-  };
-
-  recognition.onresult = (e) => {
-    const transcript = e.results[0][0].transcript.trim();
-    if (!transcript) return;
-    const textarea = targetDoc.querySelector('textarea[data-testid="stChatInputTextArea"]');
-    if (!textarea) { showToast('⚠️ Input not found', 3000); return; }
-    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.parent.HTMLTextAreaElement.prototype, 'value').set;
-    nativeInputValueSetter.call(textarea, transcript);
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    textarea.focus();
-    showToast('✅ Ready to send', 2000);
-  };
+components.html("""<script>
+(function(){
+  const D=window.parent?window.parent.document:document;
+  const ex=D.getElementById('tw-mic-btn'); if(ex) ex.remove();
+  const et=D.getElementById('tw-voice-toast'); if(et) et.remove();
+  const s=D.createElement('style');
+  s.textContent=`
+    #tw-mic-btn{position:fixed;bottom:65px;right:128px;width:40px;height:40px;border-radius:49%;
+      border:none;cursor:pointer;background:transparent;color:#1565C0;display:flex;
+      align-items:center;justify-content:center;transition:all 0.2s;padding:0;outline:none;z-index:99999;}
+    #tw-mic-btn:hover{color:#D22630;background:rgba(255,255,255,0.1);}
+    #tw-mic-btn.active{color:#E53935;animation:tw-pulse 1s infinite;}
+    #tw-mic-btn svg{width:20px;height:20px;}
+    @keyframes tw-pulse{0%{opacity:1}50%{opacity:0.4}100%{opacity:1}}
+    #tw-voice-toast{position:fixed;bottom:60px;right:52px;z-index:99999;
+      background:rgba(20,20,20,0.92);color:#fff;font-family:'Poppins',sans-serif;
+      font-size:0.75rem;padding:8px 12px;border-radius:6px;pointer-events:none;
+      opacity:0;transition:opacity 0.3s;white-space:nowrap;}
+    #tw-voice-toast.show{opacity:1;}`;
+  D.head.appendChild(s);
+  const MIC=`<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v6a2 2 0 1 0 4 0V5a2 2 0 0 0-2-2z"/><path d="M19 11a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 0 0-2 0 7 7 0 0 0 6 6.93V20H9a1 1 0 0 0 0 2h6a1 1 0 0 0 0-2h-2v-2.07A7 7 0 0 0 19 11z"/></svg>`;
+  const STP=`<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>`;
+  const btn=D.createElement('button'); btn.id='tw-mic-btn'; btn.title='Click to speak'; btn.innerHTML=MIC;
+  D.body.appendChild(btn);
+  const toast=D.createElement('div'); toast.id='tw-voice-toast'; D.body.appendChild(toast);
+  const SR=window.parent.SpeechRecognition||window.parent.webkitSpeechRecognition||
+           window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){btn.title='Voice not supported (use Chrome)';btn.style.opacity='0.35';btn.style.cursor='not-allowed';
+    btn.onclick=()=>showToast('⚠️ Voice not supported — use Chrome/Edge',3000);return;}
+  const rec=new SR(); rec.lang='en-US'; rec.interimResults=false; rec.maxAlternatives=1; rec.continuous=false;
+  let listening=false;
+  function showToast(msg,dur){toast.textContent=msg;toast.classList.add('show');
+    clearTimeout(toast._t);toast._t=setTimeout(()=>toast.classList.remove('show'),dur||2500);}
+  function start(){rec.start();listening=true;btn.classList.add('active');btn.innerHTML=STP;
+    btn.title='Listening… click to stop';showToast('🎙️ Listening…',60000);}
+  function stop(){rec.stop();}
+  btn.addEventListener('click',()=>{if(listening)stop();else start();});
+  rec.onend=()=>{listening=false;btn.classList.remove('active');btn.innerHTML=MIC;
+    btn.title='Click to speak';toast.classList.remove('show');};
+  rec.onerror=(e)=>{listening=false;btn.classList.remove('active');btn.innerHTML=MIC;
+    const m={'not-allowed':'🚫 Permission denied','no-speech':'🔇 No speech','audio-capture':'🎙️ No mic','network':'🌐 Network error'};
+    showToast(m[e.error]||`⚠️ ${e.error}`,3500);};
+  rec.onresult=(e)=>{const t=e.results[0][0].transcript.trim();if(!t)return;
+    const ta=D.querySelector('textarea[data-testid="stChatInputTextArea"]');
+    if(!ta){showToast('⚠️ Input not found',3000);return;}
+    const ns=Object.getOwnPropertyDescriptor(window.parent.HTMLTextAreaElement.prototype,'value').set;
+    ns.call(ta,t);ta.dispatchEvent(new Event('input',{bubbles:true}));ta.focus();showToast('✅ Ready to send',2000);};
 })();
-</script>
-"""
-components.html(VOICE_COMPONENT_HTML, height=45, scrolling=False)
+</script>""", height=45, scrolling=False)
 
 # ─────────────────────────────────────────────────────────────────
 #  CHAT HISTORY
@@ -1694,70 +1357,52 @@ for msg in st.session_state.messages:
             st.markdown(msg.get("summary", msg["content"]))
             if msg.get("sql"):
                 with st.expander("🔍 View SQL Query", expanded=False):
-                    st.markdown(
-                        f'<div class="sql-block">{msg["sql"]}</div>',
-                        unsafe_allow_html=True,
-                    )
+                    st.markdown(f'<div class="sql-block">{msg["sql"]}</div>', unsafe_allow_html=True)
             if msg.get("df") is not None:
-                df = pd.DataFrame(msg["df"])
-                if not df.empty:
-                    display_df = format_dataframe(df)
-                    st.dataframe(display_df, use_container_width=True)
-                    st.caption(f"{len(df)} row(s) returned")
-            if msg.get("df") is not None and msg.get("chart", "none") != "none":
-                df = pd.DataFrame(msg["df"])
+                df_h = pd.DataFrame(msg["df"])
+                if not df_h.empty:
+                    st.dataframe(format_dataframe(df_h), use_container_width=True)
+                    st.caption(f"{len(df_h)} row(s) returned")
+            if msg.get("df") is not None and msg.get("chart","none") != "none":
                 render_chart(
-                    df,
-                    msg["chart"],
-                    msg.get("chart_x", ""),
-                    msg.get("chart_y", ""),
-                    chart_color=msg.get("chart_color"),
-                    chart_title=msg.get("chart_title", ""),
+                    pd.DataFrame(msg["df"]), msg["chart"],
+                    msg.get("chart_x",""), msg.get("chart_y",""),
+                    chart_color=msg.get("chart_color"), chart_title=msg.get("chart_title",""),
                     title_color=msg.get("title_color"),
+                    x_label=msg.get("x_label"), y_label=msg.get("y_label"),
                 )
 
 # ─────────────────────────────────────────────────────────────────
-#  EMPTY-STATE AI IMAGE
-#  • left:0 / right:0  →  always centred regardless of sidebar
-#  • top:95px          →  ~5px gap below the top divider line
+#  EMPTY STATE
 # ─────────────────────────────────────────────────────────────────
 if not st.session_state.messages:
-    _welcome_icon = img_to_b64("ai_icon")
-    _icon_tag = (
-        f'<img id="tw-welcome-img" src="{_welcome_icon}" alt="AI Assistant" />'
-        if _welcome_icon
-        else '<span style="font-size:5rem; line-height:1;">🤖</span>'
-    )
-    st.markdown(
-        f"""
-        <div class="ai-welcome-img" id="tw-welcome-wrap">
-            {_icon_tag}
-            <p class="ai-welcome-caption">
-                Ask anything about your <strong>{selected_db}</strong> data
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    wi = img_to_b64("ai_icon")
+    it = f'<img id="tw-welcome-img" src="{wi}" alt="AI Assistant"/>' if wi else '<span style="font-size:5rem;">🤖</span>'
+    st.markdown(f"""
+    <div class="ai-welcome-img">
+        {it}
+        <p class="ai-welcome-caption">Ask anything about your <strong>{selected_db}</strong> data</p>
+    </div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────
 #  CHAT PROCESSING
 # ─────────────────────────────────────────────────────────────────
 if "_pending_prompt" in st.session_state:
     pending = st.session_state.pop("_pending_prompt")
-
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             result = nl_to_sql(pending, st.session_state.messages, selected_db)
 
-        sql         = result.get("sql", "").strip()
-        summary     = result.get("summary", "")
-        chart       = result.get("chart", "none")
-        chart_x     = result.get("chart_x", "")
-        chart_y     = result.get("chart_y", "")
+        sql         = result.get("sql","").strip()
+        summary     = result.get("summary","")
+        chart       = result.get("chart","none")
+        chart_x     = result.get("chart_x","")
+        chart_y     = result.get("chart_y","")
         chart_color = result.get("chart_color")
         title_color = result.get("title_color")
-        chart_title = result.get("chart_title", "")
+        chart_title = result.get("chart_title","")
+        x_label     = result.get("x_label")
+        y_label     = result.get("y_label")
         reuse_df    = result.get("_reuse_df")
 
         st.markdown(summary)
@@ -1765,68 +1410,55 @@ if "_pending_prompt" in st.session_state:
         df    = None
         error = None
 
-        if sql:
+        if reuse_df is not None and not sql:
+            df = pd.DataFrame(reuse_df)
+        elif sql:
             with st.expander("🔍 View SQL Query", expanded=False):
-                st.markdown(
-                    f'<div class="sql-block">{sql}</div>',
-                    unsafe_allow_html=True,
-                )
-
+                st.markdown(f'<div class="sql-block">{sql}</div>', unsafe_allow_html=True)
             with st.spinner("Running query..."):
-                    try:
-                        fixed_sql = fix_date_filter_in_sql(sql, selected_db)
-                        if fixed_sql != sql:
-                            sql = fixed_sql
-                            result["sql"] = fixed_sql
-                        df = run_query(sql, selected_db)
-                    except Exception as e:
-                        error = str(e)
-
+                try:
+                    fixed = fix_date_filter_in_sql(sql, selected_db)
+                    if fixed != sql:
+                        sql = fixed; result["sql"] = fixed
+                    df = run_query(sql, selected_db)
+                except Exception as e:
+                    error = str(e)
             if error:
                 st.error(f"Query failed: {error}")
-            elif df is not None:
-                if df.empty:
-                    st.info("Query ran successfully but returned no results.")
-                else:
-                    display_df = format_dataframe(df)
-                    st.dataframe(display_df, use_container_width=True)
-                    st.caption(f"{len(df)} row(s) returned")
-                    if chart != "none":
-                        resolved_x = resolve_chart_col(chart_x, list(df.columns))
-                        resolved_y = resolve_chart_col(chart_y, list(df.columns))
-                        render_chart(df, chart, resolved_x, resolved_y,
-                                     chart_color=chart_color,
-                                     chart_title=chart_title,
-                                     title_color=title_color)
 
-        resolved_x_store = resolve_chart_col(chart_x, list(df.columns)) if df is not None and not df.empty else chart_x
-        resolved_y_store = resolve_chart_col(chart_y, list(df.columns)) if df is not None and not df.empty else chart_y
+        if df is not None:
+            if df.empty and not reuse_df:
+                st.info("Query ran successfully but returned no results.")
+            elif not df.empty:
+                st.dataframe(format_dataframe(df), use_container_width=True)
+                st.caption(f"{len(df)} row(s) returned")
+                if chart != "none":
+                    rx = resolve_chart_col(chart_x, list(df.columns))
+                    ry = resolve_chart_col(chart_y, list(df.columns))
+                    render_chart(df, chart, rx, ry, chart_color=chart_color,
+                                 chart_title=chart_title, title_color=title_color,
+                                 x_label=x_label, y_label=y_label)
 
+        rx_s = resolve_chart_col(chart_x, list(df.columns)) if df is not None and not df.empty else chart_x
+        ry_s = resolve_chart_col(chart_y, list(df.columns)) if df is not None and not df.empty else chart_y
         st.session_state.messages.append({
-            "role":        "assistant",
-            "content":     summary,
-            "summary":     summary,
-            "sql":         sql,
-            "df":          df.to_dict("records") if df is not None and not df.empty else None,
-            "chart":       chart,
-            "chart_x":     resolved_x_store,
-            "chart_y":     resolved_y_store,
-            "chart_color": chart_color,
-            "title_color": title_color,
-            "chart_title": chart_title,
+            "role":"assistant","content":summary,"summary":summary,"sql":sql,
+            "df": df.to_dict("records") if df is not None and not df.empty else None,
+            "chart":chart,"chart_x":rx_s,"chart_y":ry_s,
+            "chart_color":chart_color,"title_color":title_color,"chart_title":chart_title,
+            "x_label":x_label,"y_label":y_label,
         })
 
 # ─────────────────────────────────────────────────────────────────
 #  CHAT INPUT
 # ─────────────────────────────────────────────────────────────────
 _new_prompt = None
-
 if "_inject_question" in st.session_state:
     _new_prompt = st.session_state.pop("_inject_question")
 elif prompt := st.chat_input("Ask Techwish AI..."):
     _new_prompt = prompt
 
 if _new_prompt:
-    st.session_state.messages.append({"role": "user", "content": _new_prompt})
+    st.session_state.messages.append({"role":"user","content":_new_prompt})
     st.session_state["_pending_prompt"] = _new_prompt
     st.rerun()
